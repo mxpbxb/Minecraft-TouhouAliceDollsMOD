@@ -1118,9 +1118,10 @@ impl Goal for Explode {
 
 // ---- Germany: EntityDollAICutTree ----
 
-/// `cutRange` and `cutSpeed`: how far Germany looks for a tree, and how fast it chops.
+/// `cutRange` and `cutSpeed`: how far Germany looks for a tree, and how fast it chops (twice the
+/// original's 2.5).
 const CUT_RANGE: i32 = 5;
-const CUT_SPEED: f32 = 2.5;
+const CUT_SPEED: f32 = 5.0;
 
 /// `logBlockRegex` (`log|mushroom`): logs, nether stems, and giant mushrooms.
 fn is_log(name: &str) -> bool {
@@ -1191,7 +1192,9 @@ impl Goal for CutTree {
         goals::MOVE | goals::LOOK
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !(in_mode(m, PATROL) || in_mode(m, FOLLOW)) || cx.w.game_time - self.last_scan < 20 {
+        if !(in_mode(m, PATROL) || in_mode(m, FOLLOW) || in_mode(m, RIDE))
+            || cx.w.game_time - self.last_scan < 20
+        {
             return false;
         }
         self.last_scan = cx.w.game_time;
@@ -1202,13 +1205,16 @@ impl Goal for CutTree {
         say(m.id, 1, format!("Target[{leaves},{height}]"));
         self.target = top;
         self.log = Some(log);
-        // `teleportToXYZ`: onto the top of the trunk.
-        m.position.x = f64::from(top[0]) + 0.5;
-        m.position.y = f64::from(top[1] + 1);
-        m.position.z = f64::from(top[2]) + 0.5;
-        m.previous = m.position;
-        m.nav_stop();
-        cx.events.push(MobEvent::Sound("entity.enderman.teleport", here(m), 1.0, 1.0));
+        // On its owner's head it chops from where it sits; otherwise `teleportToXYZ` puts it
+        // on top of the trunk.
+        if !in_mode(m, RIDE) {
+            m.position.x = f64::from(top[0]) + 0.5;
+            m.position.y = f64::from(top[1] + 1);
+            m.position.z = f64::from(top[2]) + 0.5;
+            m.previous = m.position;
+            m.nav_stop();
+            cx.events.push(MobEvent::Sound("entity.enderman.teleport", here(m), 1.0, 1.0));
+        }
         true
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
@@ -1216,7 +1222,7 @@ impl Goal for CutTree {
             + (m.position.y.floor() as i32 - self.target[1]).abs()
             + (m.position.z.floor() as i32 - self.target[2]).abs()
             <= CUT_RANGE;
-        (in_mode(m, PATROL) || in_mode(m, FOLLOW)) && self.log.is_some() && near
+        (in_mode(m, PATROL) || in_mode(m, FOLLOW) || in_mode(m, RIDE)) && self.log.is_some() && near
     }
     fn start(&mut self, _: &mut Mob, _: &mut Cx) {
         self.counter = 0;

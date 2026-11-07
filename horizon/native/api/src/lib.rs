@@ -274,7 +274,7 @@ fn belongings(k: &Known) -> Vec<ItemStack> {
 
 /// A line in `alice_dolls-debug.log` in the game folder: what happened when a doll item was used,
 /// to find out why some will not place.
-fn debug(host: &dyn Host, line: &str) {
+fn debug(host: &(impl Host + ?Sized), line: &str) {
     use std::io::Write;
     let path = host.instance_dir().join("alice_dolls-debug.log");
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -283,6 +283,14 @@ fn debug(host: &dyn Host, line: &str) {
             .map_or(0, |d| d.as_secs());
         let _ = writeln!(file, "{secs} {line}");
     }
+}
+
+/// Mobs already written to the debug log, so each shows once a session.
+static RENDER_SEEN: LazyLock<Mutex<std::collections::HashSet<u32>>> = LazyLock::new(Default::default);
+static TICK_SEEN: LazyLock<Mutex<std::collections::HashSet<u32>>> = LazyLock::new(Default::default);
+
+fn first_time(seen: &Mutex<std::collections::HashSet<u32>>, id: u32) -> bool {
+    seen.lock().is_ok_and(|mut seen| seen.insert(id))
 }
 
 /// The data a doll is summoned with.
@@ -365,7 +373,9 @@ fn inventory_slot(slot: i32) -> Option<usize> {
 impl Mod {
     fn open_inventory(&self, host: &mut dyn Host, player: u128, id: u32, data: &DollData) {
         let name = doll_of(host, id).map_or("Doll", |d| d.name);
-        if let Some(window) = host.open_menu(player, 1, Text::literal(name), data.items.clone())
+        let window = host.open_menu(player, 1, Text::literal(name), data.items.clone());
+        debug(host, &format!("inventory {id}: open_menu -> {window:?}"));
+        if let Some(window) = window
             && let Ok(mut open) = OPEN.lock()
         {
             open.insert(player, (id, window));
@@ -501,6 +511,7 @@ impl Hooks for Mod {
         else {
             return;
         };
+        debug(host, &format!("inventory {id}: click window {} (open {window}) slot {}", event.window, event.slot));
         if window != event.window {
             return;
         }
@@ -535,7 +546,9 @@ impl Hooks for Mod {
             else {
                 return;
             };
-            if !host.run_command(&format!("item replace entity {name} container.{inv} with minecraft:air")) {
+            let ran = host.run_command(&format!("item replace entity {name} container.{inv} with minecraft:air"));
+            debug(host, &format!("  put {} x{} from slot {inv}: command ran={ran}", stack.item, stack.count));
+            if !ran {
                 return;
             }
             data.items = items;
@@ -604,7 +617,16 @@ impl Hooks for Mod {
         }
         let data = DOLL.get(host, holder).unwrap_or_default();
         if known(id).is_none_or(|k| k.owner != data.owner) {
-            let Some(doll) = doll_of(host, id) else { return };
+            let Some(doll) = doll_of(host, id) else {
+                if first_time(&TICK_SEEN, id) {
+                    let name = host.entity(id).and_then(|e| host.entity_name(e));
+                    debug(host, &format!("tick {id}: has doll data but is named {name:?}"));
+                }
+                return;
+            };
+            if first_time(&TICK_SEEN, id) {
+                debug(host, &format!("tick {id} {:?}: mode {} owner set {}", doll.name, data.mode, data.owner != 0));
+            }
             remember(id, doll, &data);
             // The first version stood by with NoAI, which would stop the goals now.
             if let Some(entity) = host.entity(id) {
@@ -632,15 +654,35 @@ impl Hooks for Mod {
         if event.mob.kind != KIND {
             return Flow::Continue;
         }
-        let Some(doll) = event.mob.custom_name.and_then(doll_named) else {
+        let name = event.mob.custom_name;
+        let Some(doll) = name.and_then(doll_named) else {
+            if name.is_some_and(|n| n.contains("Doll")) && first_time(&RENDER_SEEN, event.mob.id) {
+                debug(host, &format!("render {}: named {name:?}, which is no doll name", event.mob.id));
+            }
             return Flow::Continue;
         };
         // Without its texture a doll would be invisible: then it shows as the chicken it is.
-        if model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held) {
-            Flow::Cancel
-        } else {
-            Flow::Continue
+        let drawn = model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held);
+        if first_time(&RENDER_SEEN, event.mob.id) {
+            debug(host, &format!("render {} {:?}: drawn={drawn}", event.mob.id, doll.name));
+            if !drawn {
+                // Which sprites the atlas has: a quad with no area draws nothing to see.
+                let flat = [[0.0f32; 3]; 4];
+                for sprite in [
+                    doll.sprite,
+                    "alice_dolls:entity/shanghai",
+                    "alice_dolls:item/shanghai_doll",
+                    "lunatic:entity/character/alice_margatroid",
+                    "entity/chicken/chicken_temperate",
+                    "minecraft:entity/chicken/chicken_temperate",
+                    "block/stone",
+                ] {
+                    let found = host.draw_quad(event.draw, sprite, flat, [0.0; 4], 0xFF_FF_FF);
+                    debug(host, &format!("  atlas has {sprite}: {found}"));
+                }
+            }
         }
+        if drawn { Flow::Cancel } else { Flow::Continue }
     }
 }
 

@@ -183,6 +183,9 @@ pub fn draw_doll(
     draw.rotate_about([1.0, 0.0, 0.0], degrees(arm), to_pose(RIGHT_ARM.pivot));
     draw.translate(to_pose([-3.0, 19.0, 0.0]));
     draw.rotate_about([1.0, 0.0, 0.0], 90.0, [0.0, 0.0, 0.0]);
+    // `ItemInHandLayer` turns the item half round about its own up axis too: without it an axe's
+    // blade faced the doll. (A sword or pickaxe looks the same either way.)
+    draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.0, 0.0, 0.0]);
     draw.scale([0.6, 0.6, 0.6]);
     let stack = ItemStack::new(held, 1);
     host.draw_item(draw, &stack, DisplayContext::ThirdPersonRightHand, None, 0);
