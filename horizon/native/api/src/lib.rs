@@ -199,19 +199,18 @@ fn known(id: u32) -> Option<Known> {
     KNOWN.lock().ok()?.get(&id).copied()
 }
 
-/// One right-click reaches the game more than once (each hand asks), so a doll takes one click a
-/// quarter of a second.
-static LAST_CLICK: LazyLock<Mutex<HashMap<u32, Instant>>> = LazyLock::new(Default::default);
-const CLICK_GAP: Duration = Duration::from_millis(250);
+/// One right-click reaches the game more than once: each hand asks, and a held button asks again
+/// every 4 ticks. A player's click counts only after a pause of `CLICK_GAP` since the last time they
+/// asked, so holding the button is one click however long it is held.
+static LAST_CLICK: LazyLock<Mutex<HashMap<u128, Instant>>> = LazyLock::new(Default::default);
+const CLICK_GAP: Duration = Duration::from_millis(350);
 
-fn fresh_click(id: u32) -> bool {
+fn fresh_click(player: u128) -> bool {
     let Ok(mut clicks) = LAST_CLICK.lock() else { return true };
     let now = Instant::now();
-    if clicks.get(&id).is_some_and(|at| now.duration_since(*at) < CLICK_GAP) {
-        return false;
-    }
-    clicks.insert(id, now);
-    true
+    let fresh = clicks.get(&player).is_none_or(|at| now.duration_since(*at) >= CLICK_GAP);
+    clicks.insert(player, now);
+    fresh
 }
 
 /// Hands a doll's item to its owner. False when the owner is not here or has no room.
@@ -282,7 +281,7 @@ impl Hooks for Mod {
         let Some(player) = host.acting_player() else {
             return Flow::Continue;
         };
-        if !fresh_click(id) {
+        if !fresh_click(player.uuid) {
             return Flow::Cancel;
         }
         let mut data = DOLL.get(host, holder).unwrap_or_default();

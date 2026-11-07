@@ -57,6 +57,8 @@ const HIT_EVERY: i64 = 12;
 const OWNER_GUARD: f64 = 12.0;
 /// Ticks without seeing its target before a doll gives up.
 const LOST_AFTER: i32 = 60;
+/// A doll moves 35% faster than a chicken.
+const SPEED_SCALE: f64 = 1.35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DollState {
@@ -170,6 +172,8 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
         kind.sounds = ["", "", ""];
         kind.step_sound = None;
     }
+    // Every walk and run of a doll scales from this.
+    m.attrs.speed = m.kind.speed * SPEED_SCALE;
     let Some(state) = state(m.id) else { return };
     m.no_gravity = state.mode == RIDE;
     if state.mode == RIDE && state.enabled {
