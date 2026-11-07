@@ -13,22 +13,25 @@ The original Java source is in the version folders of this repository. This fold
 
 | Doll | Crafted with | What it does |
 |---|---|---|
-| Shanghai | golden sword | Fights hostile mobs, shears sheep and steals from animals, reports the mobs around it |
-| Horai | golden pickaxe | Reports the ore within 3 blocks and digs its way to it |
+| Shanghai | golden sword | Fights hostile mobs (from your head too), shears sheep and steals from animals, reports the mobs around it |
+| Horai | golden pickaxe | Reports the ore within 3 blocks and digs its way to it, even from your head |
+| Diamond Horai | diamond pickaxe | The same as Horai for now |
 | Ooedo | TNT | On patrol, walks up to the nearest hostile mob and explodes |
 | Germany | golden axe | Finds a tree within 5 blocks, hops to its top and chops it down |
 | London | eye of ender | Reports the spawners in the 64 layers above and below it |
 
 Each recipe is the item in the top left, wool, and a Doll Core in the middle. Right-click a doll
 empty-handed to switch modes: Standby, Patrol, Follow, Rideon. Right-click with a Doll Core to turn
-its AI on or off, or with a book to change how much it says. Hit it with a Doll Core to pick it up.
+its AI on or off, with a book to change how much it says, or with a chest to open its 9-slot
+inventory. Hit it with a Doll Core to pick it up. A doll's item can't be burnt, blown up or despawned,
+and a dead doll's item and inventory go to its owner.
 
 ## How it works on the fork
 
 The fork cannot add new living mob types, so each doll is a silent chicken with the doll's name,
 drawn with the doll's own model. A cancellable hook on `Mob::voice` keeps it quiet.
 
-Not ported yet: the doll inventory (and so Germany's sapling planting), item pickup, chunk
+Not ported yet: Germany's sapling planting, item pickup, chunk
 loading, Russia and Grand Guignol, Ooedo's quarry, and London's stronghold direction and spawner
 mob names.
 

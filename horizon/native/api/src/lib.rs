@@ -1,9 +1,10 @@
 //! Alice's Dolls for the eltanschauung/horizon fork: a port of the 1.7.10 mod by iwa_yukinoshita.
 //!
 //! Alice's dolls: Shanghai fights and steals, Horai finds and mines ore, Ooedo blows itself up
-//! next to monsters, Germany chops trees, London finds spawners. Right-click it empty-handed to go Standby, Patrol, Follow, Rideon and back to
-//! Standby; with a Doll Core to switch its AI on and off, or to take over someone else's doll; with
-//! a book to change how much it says. Hit it with a Doll Core, or kill it, to get the item back.
+//! next to monsters, Germany chops trees, London finds spawners. Right-click one empty-handed to go
+//! Standby, Patrol, Follow, Rideon and back to Standby; with a Doll Core to switch its AI on and
+//! off, or to take over someone else's doll; with a book to change how much it says; with a chest
+//! to open its inventory. Hit it with a Doll Core, or kill it, to get the item back.
 //!
 //! The fork has no living mod entity types, so a doll is a silent chicken with a custom name:
 //! this mod draws it, and `goals.rs` drives it. A chicken is close to the doll's size and falls
@@ -19,12 +20,15 @@ use horizon_client::mobs::alice_doll_goals as goals;
 use horizon_client::mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, AttackEntityEvent, Compound,
     EntityTickListenedEvent, EntityTickPostEvent, Flow, Holder, Hooks, Host, InteractEntityEvent,
-    ItemStack, LootDropsEvent, MobSubmitEvent, Tag, Text, UseItemOnEvent,
+    ItemStack, LootDropsEvent, MenuClickedEvent, MenuClosedEvent, MobSubmitEvent, Tag, Text,
+    UseItemOnEvent,
 };
 
 // The kind every doll is underneath.
 const KIND: &str = "minecraft:chicken";
 const DOLL_CORE: &str = "alice_dolls:doll_core";
+/// `DollBase.getSizeInventory`: one row.
+const INVENTORY: usize = 9;
 
 /// One of the dolls: the name that makes a chicken this doll, its item, its texture, and what it
 /// holds (`getHeldItem`).
@@ -36,7 +40,7 @@ pub struct Doll {
     held: &'static str,
 }
 
-const DOLLS: [Doll; 5] = [
+const DOLLS: [Doll; 6] = [
     Doll {
         name: goals::SHANGHAI,
         item: "alice_dolls:shanghai_doll",
@@ -48,6 +52,12 @@ const DOLLS: [Doll; 5] = [
         item: "alice_dolls:horai_doll",
         sprite: "alice_dolls:entity/horai",
         held: "minecraft:golden_pickaxe",
+    },
+    Doll {
+        name: goals::DIAMOND_HORAI,
+        item: "alice_dolls:diamond_horai_doll",
+        sprite: "alice_dolls:entity/horai",
+        held: "minecraft:diamond_pickaxe",
     },
     Doll {
         name: goals::OOEDO,
@@ -82,6 +92,7 @@ fn doll_of(host: &dyn Host, id: u32) -> Option<&'static Doll> {
     let name = host.entity(id).and_then(|e| host.entity_name(e))?;
     doll_named(&name)
 }
+
 const HEALTH: f32 = 8.0;
 /// The original's starting state bits, 528: chat level 2.
 const DEFAULT_CHAT_LEVEL: u8 = 2;
@@ -93,7 +104,7 @@ pub fn hooks() -> Box<dyn Hooks> {
 struct Mod;
 
 /// What is saved with a doll beyond the game's own data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct DollData {
     /// The player's UUID.
     owner: u128,
@@ -101,11 +112,19 @@ struct DollData {
     /// Work AI on or off.
     enabled: bool,
     chat_level: u8,
+    /// Its inventory, by slot.
+    items: Vec<Option<ItemStack>>,
 }
 
 impl Default for DollData {
     fn default() -> Self {
-        Self { owner: 0, mode: goals::STANDBY, enabled: true, chat_level: DEFAULT_CHAT_LEVEL }
+        Self {
+            owner: 0,
+            mode: goals::STANDBY,
+            enabled: true,
+            chat_level: DEFAULT_CHAT_LEVEL,
+            items: vec![None; INVENTORY],
+        }
     }
 }
 
@@ -116,6 +135,7 @@ fn encode(data: &DollData) -> Result<Compound, AttachmentError> {
         ("mode".into(), Tag::Byte(data.mode as i8)),
         ("enabled".into(), Tag::Byte(i8::from(data.enabled))),
         ("chat_level".into(), Tag::Byte(data.chat_level as i8)),
+        ("Items".into(), goals::encode_items(&data.items)),
     ]
     .into())
 }
@@ -136,6 +156,7 @@ fn decode(tag: &Compound) -> Result<DollData, AttachmentError> {
         mode: byte("mode").unwrap_or(old_mode),
         enabled: byte("enabled").is_none_or(|n| n != 0),
         chat_level: byte("chat_level").unwrap_or(DEFAULT_CHAT_LEVEL),
+        items: goals::decode_items(tag.get(&"Items".into()), INVENTORY),
     })
 }
 
@@ -162,7 +183,7 @@ fn mode_name(mode: u8) -> &'static str {
 static LAST_SAID: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(Default::default);
 
 /// `chatMessage`: tells the owner, if the doll's chat level allows and it is news.
-fn say(host: &mut dyn Host, id: u32, data: DollData, level: u8, text: &str) {
+fn say(host: &mut dyn Host, id: u32, data: &DollData, level: u8, text: &str) {
     if data.chat_level < level {
         return;
     }
@@ -182,6 +203,10 @@ fn click(host: &mut dyn Host, id: u32) {
     }
 }
 
+fn tell_state(id: u32, data: &DollData) {
+    goals::set_state(id, data.mode, data.enabled, data.owner);
+}
+
 static DOLL: AttachmentType<DollData> = AttachmentType {
     namespace: "alice_dolls",
     name: "doll",
@@ -192,23 +217,28 @@ static DOLL: AttachmentType<DollData> = AttachmentType {
 };
 
 /// What is remembered of each doll seen since the game started: a dying or exploding doll's item
-/// goes to its owner, and by then its attachment may be gone.
-#[derive(Clone, Copy)]
+/// and inventory go to its owner, and by then its attachment may be gone.
+#[derive(Clone)]
 struct Known {
     doll: &'static Doll,
     owner: u128,
+    items: Vec<Option<ItemStack>>,
 }
 
 static KNOWN: LazyLock<Mutex<HashMap<u32, Known>>> = LazyLock::new(Default::default);
 
-fn remember(id: u32, doll: &'static Doll, owner: u128) {
+fn remember(id: u32, doll: &'static Doll, data: &DollData) {
     if let Ok(mut known) = KNOWN.lock() {
-        known.insert(id, Known { doll, owner });
+        known.insert(id, Known { doll, owner: data.owner, items: data.items.clone() });
     }
 }
 
 fn known(id: u32) -> Option<Known> {
-    KNOWN.lock().ok()?.get(&id).copied()
+    KNOWN.lock().ok()?.get(&id).cloned()
+}
+
+fn forget(id: u32) -> Option<Known> {
+    KNOWN.lock().ok()?.remove(&id)
 }
 
 /// One right-click reaches the game more than once: each hand asks, and a held button asks again
@@ -225,9 +255,19 @@ fn fresh_click(player: u128) -> bool {
     fresh
 }
 
-/// Hands a doll's item to its owner. False when the owner is not here or has no room.
-fn return_to_owner(host: &mut dyn Host, owner: u128, item: &str) -> bool {
-    owner != 0 && host.give_stack(owner, ItemStack::new(item, 1)).is_none()
+/// Hands `stacks` to `owner`: what did not fit, or everything when the owner is not here.
+fn give_to_owner(host: &mut dyn Host, owner: u128, stacks: Vec<ItemStack>) -> Vec<ItemStack> {
+    if owner == 0 {
+        return stacks;
+    }
+    stacks.into_iter().filter_map(|stack| host.give_stack(owner, stack)).collect()
+}
+
+/// A gone doll's item and everything it carried, for its owner.
+fn belongings(k: &Known) -> Vec<ItemStack> {
+    let mut all = vec![ItemStack::new(k.doll.item, 1)];
+    all.extend(k.items.iter().flatten().cloned());
+    all
 }
 
 /// The data a doll is summoned with.
@@ -249,6 +289,75 @@ fn doll_nbt(doll: &Doll) -> Compound {
     .into()
 }
 
+// ---- Inventories ----
+
+/// The doll inventory each player has open: the doll, and the menu's window id.
+static OPEN: LazyLock<Mutex<HashMap<u128, (u32, i32)>>> = LazyLock::new(Default::default);
+
+fn same_kind(a: &ItemStack, b: &ItemStack) -> bool {
+    a.item == b.item && a.damage == b.damage && a.extra == b.extra
+}
+
+/// Puts `stack` into `items` whole, onto matching stacks first, then into empty slots. False, and
+/// nothing changed, when it does not all fit.
+fn store(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> bool {
+    let mut room = 0;
+    for slot in items.iter() {
+        room += match slot {
+            None => max,
+            Some(s) if same_kind(s, stack) => max.saturating_sub(s.count),
+            Some(_) => 0,
+        };
+    }
+    if room < stack.count {
+        return false;
+    }
+    let mut left = stack.count;
+    for slot in items.iter_mut().filter(|s| s.is_some()) {
+        if let Some(s) = slot
+            && same_kind(s, stack)
+        {
+            let add = left.min(max.saturating_sub(s.count));
+            s.count += add;
+            left -= add;
+        }
+    }
+    for slot in items.iter_mut() {
+        if left == 0 {
+            break;
+        }
+        if slot.is_none() {
+            let mut s = stack.clone();
+            s.count = left.min(max);
+            left -= s.count;
+            *slot = Some(s);
+        }
+    }
+    true
+}
+
+/// `native_menu_inventory_slot`: the player's inventory slot a click below the doll's row landed
+/// on (the three rows of the inventory, then the hotbar).
+fn inventory_slot(slot: i32) -> Option<usize> {
+    let below = usize::try_from(slot).ok()?.checked_sub(INVENTORY)?;
+    match below {
+        0..27 => Some(below + 9),
+        27..36 => Some(below - 27),
+        _ => None,
+    }
+}
+
+impl Mod {
+    fn open_inventory(&self, host: &mut dyn Host, player: u128, id: u32, data: &DollData) {
+        let name = doll_of(host, id).map_or("Doll", |d| d.name);
+        if let Some(window) = host.open_menu(player, 1, Text::literal(name), data.items.clone())
+            && let Ok(mut open) = OPEN.lock()
+        {
+            open.insert(player, (id, window));
+        }
+    }
+}
+
 impl Hooks for Mod {
     /// Places a doll from its item.
     fn use_item_on(&self, host: &mut dyn Host, event: &mut UseItemOnEvent<'_>) -> Flow {
@@ -268,10 +377,10 @@ impl Hooks for Mod {
             host.action_bar(player.uuid, Text::literal(text));
             return Flow::Cancel;
         };
-        remember(id, doll, player.uuid);
         let data = DollData { owner: player.uuid, ..DollData::default() };
+        remember(id, doll, &data);
+        tell_state(id, &data);
         let _ = DOLL.set(host, Holder::Entity(id), data);
-        goals::set_state(id, data.mode, data.enabled);
         if player.game_mode != 1 {
             host.take_items(doll.item, 1);
         }
@@ -312,14 +421,14 @@ impl Hooks for Mod {
             data.owner = player.uuid;
             data.mode = goals::STANDBY;
             if let Some(doll) = doll_of(host, id) {
-                remember(id, doll, player.uuid);
+                remember(id, doll, &data);
             }
-            let _ = DOLL.set(host, holder, data);
-            goals::set_state(id, data.mode, data.enabled);
+            tell_state(id, &data);
             if let Some(at) = host.entity(id).and_then(|e| host.entity_position(e)) {
                 host.play_local_sound("minecraft:item.flintandsteel.use", at, 1.0, 1.0, 0);
             }
-            say(host, id, data, 2, "Activation successful!");
+            say(host, id, &data, 2, "Activation successful!");
+            let _ = DOLL.set(host, holder, data);
             return Flow::Cancel;
         }
         match held {
@@ -328,7 +437,7 @@ impl Hooks for Mod {
             Some(DOLL_CORE) => {
                 data.enabled = !data.enabled;
                 let text = if data.enabled { "Work AI ON" } else { "Work AI OFF" };
-                say(host, id, data, 1, text);
+                say(host, id, &data, 1, text);
                 click(host, id);
             }
             Some("minecraft:book") => {
@@ -338,20 +447,85 @@ impl Hooks for Mod {
                 click(host, id);
             }
             Some("minecraft:chest") => {
-                host.action_bar(player.uuid, Text::literal(format!("{name} : no inventory yet")));
+                self.open_inventory(host, player.uuid, id, &data);
+                return Flow::Cancel;
             }
             _ => {
                 data.mode = next_mode(data.mode);
-                say(host, id, data, 1, mode_name(data.mode));
+                say(host, id, &data, 1, mode_name(data.mode));
                 click(host, id);
             }
         }
+        tell_state(id, &data);
         let _ = DOLL.set(host, holder, data);
-        goals::set_state(id, data.mode, data.enabled);
         Flow::Cancel
     }
 
-    /// `attackEntityFrom`: a blow with a Doll Core in hand picks the doll straight up.
+    /// A click in a doll's inventory: a doll slot hands its stack to the player, an inventory slot
+    /// moves that whole stack into the doll if it fits. The menu itself moves nothing.
+    fn menu_clicked(&self, host: &mut dyn Host, event: &mut MenuClickedEvent) {
+        let Some((id, window)) = OPEN.lock().ok().and_then(|open| open.get(&event.uuid).copied())
+        else {
+            return;
+        };
+        if window != event.window {
+            return;
+        }
+        let holder = Holder::Entity(id);
+        if !DOLL.has(host, holder).unwrap_or(false) {
+            host.close_menu(event.uuid);
+            return;
+        }
+        let mut data = DOLL.get(host, holder).unwrap_or_default();
+        if data.owner != event.uuid {
+            return;
+        }
+        if let Ok(slot) = usize::try_from(event.slot)
+            && slot < INVENTORY
+        {
+            // Out of the doll, into the player's inventory; what does not fit stays.
+            if let Some(stack) = data.items[slot].take() {
+                data.items[slot] = host.give_stack(event.uuid, stack);
+            }
+        } else if let Some(inv) = inventory_slot(event.slot) {
+            // Into the doll: only a whole stack, and only once the doll has made room for it.
+            let Some(stack) = host.player_stacks(event.uuid).and_then(|s| s.get(inv).cloned().flatten())
+            else {
+                return;
+            };
+            let max = host.max_stack_size(&stack.item).unwrap_or(64);
+            let mut items = data.items.clone();
+            if !store(&mut items, &stack, max) {
+                return;
+            }
+            let Some(name) = host.server_players().into_iter().find(|p| p.uuid == event.uuid).map(|p| p.name)
+            else {
+                return;
+            };
+            if !host.run_command(&format!("item replace entity {name} container.{inv} with minecraft:air")) {
+                return;
+            }
+            data.items = items;
+        } else {
+            return;
+        }
+        host.set_menu_items(event.uuid, data.items.clone());
+        if let Some(doll) = doll_of(host, id) {
+            remember(id, doll, &data);
+        }
+        let _ = DOLL.set(host, holder, data);
+    }
+
+    fn menu_closed(&self, _: &mut dyn Host, event: &mut MenuClosedEvent) {
+        if let Ok(mut open) = OPEN.lock()
+            && open.get(&event.uuid).is_some_and(|(_, window)| *window == event.window)
+        {
+            open.remove(&event.uuid);
+        }
+    }
+
+    /// `attackEntityFrom`: a blow with a Doll Core in hand picks the doll straight up, with
+    /// everything it carried.
     fn attack_entity(&self, host: &mut dyn Host, event: &mut AttackEntityEvent<'_>) -> Flow {
         let id = event.entity as u32;
         if event.kind != KIND
@@ -363,11 +537,11 @@ impl Hooks for Mod {
         let (Some(player), Some(doll)) = (host.acting_player(), doll_of(host, id)) else {
             return Flow::Continue;
         };
-        if let Ok(mut known) = KNOWN.lock() {
-            known.remove(&id);
-        }
+        let data = DOLL.get(host, Holder::Entity(id)).unwrap_or_default();
+        forget(id);
         host.remove_mob(&player.dimension, id);
-        host.give_items(doll.item, 1);
+        let k = Known { doll, owner: player.uuid, items: data.items };
+        give_to_owner(host, player.uuid, belongings(&k));
         Flow::Cancel
     }
 
@@ -379,12 +553,12 @@ impl Hooks for Mod {
     fn entity_tick_post(&self, host: &mut dyn Host, event: &mut EntityTickPostEvent<'_>) {
         for (from, level, text) in goals::take_messages() {
             let data = DOLL.get(host, Holder::Entity(from)).unwrap_or_default();
-            say(host, from, data, level, &text);
+            say(host, from, &data, level, &text);
         }
-        // An Ooedo that blew itself up: its item goes back to its owner.
+        // An Ooedo that blew itself up: it and what it carried go back to its owner.
         for from in goals::take_spent() {
-            if let Some(k) = known(from) {
-                return_to_owner(host, k.owner, k.doll.item);
+            if let Some(k) = forget(from) {
+                give_to_owner(host, k.owner, belongings(&k));
             }
         }
         if event.kind != KIND {
@@ -398,26 +572,25 @@ impl Hooks for Mod {
         let data = DOLL.get(host, holder).unwrap_or_default();
         if known(id).is_none_or(|k| k.owner != data.owner) {
             let Some(doll) = doll_of(host, id) else { return };
-            remember(id, doll, data.owner);
+            remember(id, doll, &data);
             // The first version stood by with NoAI, which would stop the goals now.
             if let Some(entity) = host.entity(id) {
                 host.entity_merge_nbt(entity, [("NoAI".into(), Tag::Byte(0))].into());
             }
         }
-        goals::set_state(id, data.mode, data.enabled);
+        tell_state(id, &data);
     }
 
-    /// A dead doll leaves itself, not feathers and raw chicken, and it goes straight to its owner.
-    /// It drops where it died only when the owner is away or has no room.
+    /// A dead doll leaves itself and what it carried, not feathers and raw chicken, and they go
+    /// straight to its owner. They drop where it died only when the owner is away or has no room.
     fn loot_drops(&self, host: &mut dyn Host, event: &mut LootDropsEvent<'_>) {
         let Some((id, KIND)) = event.context.entity else {
             return;
         };
-        if let Some(k) = known(id) {
+        if let Some(k) = forget(id) {
             event.drops.clear();
-            if !return_to_owner(host, k.owner, k.doll.item) {
-                event.drops.push(ItemStack::new(k.doll.item, 1));
-            }
+            let left = give_to_owner(host, k.owner, belongings(&k));
+            event.drops.extend(left);
         }
     }
 
@@ -444,7 +617,15 @@ mod tests {
 
     #[test]
     fn a_dolls_data_survives_saving() {
-        let data = DollData { owner: u128::MAX - 41, mode: goals::RIDE, enabled: false, chat_level: 3 };
+        let mut items = vec![None; INVENTORY];
+        items[3] = Some(ItemStack::new("minecraft:torch", 12));
+        let data = DollData {
+            owner: u128::MAX - 41,
+            mode: goals::RIDE,
+            enabled: false,
+            chat_level: 3,
+            items,
+        };
         assert_eq!(decode(&encode(&data).unwrap()).unwrap(), data);
         let data = DollData { owner: 7 << 64, ..DollData::default() };
         assert_eq!(decode(&encode(&data).unwrap()).unwrap(), data);
@@ -465,6 +646,30 @@ mod tests {
         assert_eq!(following.mode, goals::FOLLOW);
         assert!(following.enabled);
         assert_eq!(following.chat_level, DEFAULT_CHAT_LEVEL);
+        assert_eq!(following.items, vec![None; INVENTORY]);
+    }
+
+    #[test]
+    fn a_stack_goes_in_whole_or_not_at_all() {
+        let mut items = vec![None; INVENTORY];
+        items[0] = Some(ItemStack::new("minecraft:torch", 60));
+        assert!(store(&mut items, &ItemStack::new("minecraft:torch", 10), 64));
+        assert_eq!(items[0].as_ref().map(|s| s.count), Some(64));
+        assert_eq!(items[1].as_ref().map(|s| s.count), Some(6));
+        let mut full = vec![Some(ItemStack::new("minecraft:dirt", 64)); INVENTORY];
+        let before = full.clone();
+        assert!(!store(&mut full, &ItemStack::new("minecraft:torch", 1), 64));
+        assert_eq!(full, before);
+    }
+
+    #[test]
+    fn clicks_below_the_row_land_on_the_inventory_then_the_hotbar() {
+        assert_eq!(inventory_slot(3), None);
+        assert_eq!(inventory_slot(9), Some(9));
+        assert_eq!(inventory_slot(35), Some(35));
+        assert_eq!(inventory_slot(36), Some(0));
+        assert_eq!(inventory_slot(44), Some(8));
+        assert_eq!(inventory_slot(45), None);
     }
 
     #[test]

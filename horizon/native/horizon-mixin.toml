@@ -45,3 +45,29 @@ cancellable = true
 target = "horizon_client_lib::mobs::farm::chicken_egg_step"
 helper = "doll_egg.rs"
 bindings = [{ name = "m", ty = "&crate::mobs::Mob", value = "&*m" }]
+
+# A doll's item is never destroyed: fire, lava, cactus and anything else that hurts an item...
+[[injection]]
+id = "doll-item-hurt"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client_lib::entities::ItemEntity::hurt"
+helper = "doll_item_hurt.rs"
+bindings = [{ name = "item", ty = "&crate::entities::ItemEntity", value = "&*self" }]
+
+# ...never despawns...
+[[injection]]
+id = "doll-item-age"
+kind = "HEAD"
+target = "horizon_client_lib::entities::ItemEntity::tick_settle"
+helper = "doll_item_age.rs"
+bindings = [{ name = "item", ty = "&mut crate::entities::ItemEntity", value = "&mut *self" }]
+
+# ...and explosions pass it by.
+[[injection]]
+id = "doll-item-blast"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client::game::entity::<ItemEntity as Entity>::ignores_explosion"
+helper = "doll_item_blast.rs"
+bindings = [{ name = "item", ty = "&horizon_client::entities::ItemEntity", value = "&*self" }]

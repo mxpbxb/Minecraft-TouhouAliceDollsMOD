@@ -13,6 +13,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 /// The names that make a chicken a doll, and which doll. The api crate uses these too.
 pub const SHANGHAI: &str = "Shanghai Doll";
 pub const HORAI: &str = "Horai Doll";
+pub const DIAMOND_HORAI: &str = "Diamond Horai Doll";
 pub const OOEDO: &str = "Ooedo Doll";
 pub const GERMANY: &str = "Germany Doll";
 pub const LONDON: &str = "London Doll";
@@ -32,7 +33,7 @@ fn kind_of(m: &Mob) -> Option<Kind> {
     }
     match m.custom_name.as_deref()? {
         SHANGHAI => Some(Kind::Shanghai),
-        HORAI => Some(Kind::Horai),
+        HORAI | DIAMOND_HORAI => Some(Kind::Horai),
         OOEDO => Some(Kind::Ooedo),
         GERMANY => Some(Kind::Germany),
         LONDON => Some(Kind::London),
@@ -70,7 +71,17 @@ const SPEED_SCALE: f64 = 1.35;
 struct DollState {
     mode: u8,
     enabled: bool,
+    /// The owner's UUID.
+    owner: u128,
 }
+
+/// A doll's item (`alice_dolls:*_doll`): the item hooks keep these from being destroyed.
+pub fn is_doll_item(item: &str) -> bool {
+    item.starts_with("alice_dolls:") && item.ends_with("_doll")
+}
+
+/// The game's own reading and writing of item slots, for the api crate to save inventories with.
+pub use horizon_items::item_nbt::{decode_items, encode_items};
 
 static STATES: LazyLock<Mutex<HashMap<u32, DollState>>> = LazyLock::new(Default::default);
 static MESSAGES: Mutex<Vec<(u32, u8, String)>> = Mutex::new(Vec::new());
@@ -80,9 +91,23 @@ static SHEARABLE: LazyLock<Mutex<HashSet<u32>>> = LazyLock::new(Default::default
 static SHEARED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// The api crate's word on a doll. A mob is only a doll once this has named it.
-pub fn set_state(id: u32, mode: u8, enabled: bool) {
+pub fn set_state(id: u32, mode: u8, enabled: bool, owner: u128) {
     if let Ok(mut states) = STATES.lock() {
-        states.insert(id, DollState { mode, enabled });
+        states.insert(id, DollState { mode, enabled, owner });
+    }
+}
+
+/// Whether a shot or blow from doll `from` must spare `who`: its owner, and every doll of the same
+/// owner. For the shooting dolls to come (Reimu's, Marisa's): their projectiles pass through these.
+/// The fork's mob world shows one player, the local one, so `Who::Player` counts as the owner.
+#[allow(dead_code)]
+pub fn spares(from: u32, who: Who) -> bool {
+    match who {
+        Who::Player => true,
+        Who::Mob(id) => match (state(from), state(id)) {
+            (Some(a), Some(b)) => a.owner == b.owner,
+            _ => false,
+        },
     }
 }
 
@@ -291,8 +316,10 @@ fn patrol_target(s: &Seen) -> bool {
 struct DollRide;
 
 impl Goal for DollRide {
+    // Only JUMP: the hook before each tick holds the doll on the head, and its jobs (Horai's mining,
+    // Shanghai's fighting) still need MOVE and LOOK while it rides.
     fn flags(&self) -> u8 {
-        goals::MOVE | goals::LOOK | goals::JUMP
+        goals::JUMP
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         in_mode(m, RIDE) && cx.w.player.is_some()
@@ -397,7 +424,7 @@ impl Goal for DollAttack {
         self.last_scan = cx.w.game_time;
         self.target = if in_mode(m, PATROL) {
             nearest(m, cx, enemy)
-        } else if in_mode(m, FOLLOW) {
+        } else if in_mode(m, FOLLOW) || in_mode(m, RIDE) {
             nearest(m, cx, |s| {
                 matches!(s.target, Some(Who::Player)) || (enemy(s) && near_owner(cx, s))
             })
@@ -410,7 +437,7 @@ impl Goal for DollAttack {
         let Some(s) = self.target.and_then(|id| cx.w.seen(id)) else { return false };
         let keep = if in_mode(m, PATROL) {
             true
-        } else if in_mode(m, FOLLOW) {
+        } else if in_mode(m, FOLLOW) || in_mode(m, RIDE) {
             // A following doll does not chase off: it lets go of anything that leaves its owner.
             matches!(s.target, Some(Who::Player)) || near_owner(cx, s)
         } else {
@@ -440,7 +467,8 @@ impl Goal for DollAttack {
         } else {
             self.lost += 1;
         }
-        if cx.w.game_time - self.last_path >= PATH_EVERY {
+        // A riding doll strikes from the head, at whatever comes within reach.
+        if !in_mode(m, RIDE) && cx.w.game_time - self.last_path >= PATH_EVERY {
             self.last_path = cx.w.game_time;
             m.nav_move_to_entity(cx.w, at, 0, 1.0);
         }
@@ -853,7 +881,7 @@ impl Goal for ReportOre {
     }
 }
 
-/// `EntityDollAIMineBlock`: on patrol or following, digs towards the nearest ore it can reach,
+/// `EntityDollAIMineBlock`: on patrol, following, or riding its owner's head, digs towards the nearest ore it can reach,
 /// one block at a time, taking as long over each as its hardness says.
 #[derive(Clone, Debug, Default)]
 struct MineOre {
@@ -900,7 +928,9 @@ impl Goal for MineOre {
         goals::MOVE | goals::LOOK
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !(in_mode(m, PATROL) || in_mode(m, FOLLOW)) || cx.w.game_time - self.last_scan < 20 {
+        if !(in_mode(m, PATROL) || in_mode(m, FOLLOW) || in_mode(m, RIDE))
+            || cx.w.game_time - self.last_scan < 20
+        {
             return false;
         }
         self.last_scan = cx.w.game_time;
@@ -913,7 +943,7 @@ impl Goal for MineOre {
         }
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        (in_mode(m, PATROL) || in_mode(m, FOLLOW))
+        (in_mode(m, PATROL) || in_mode(m, FOLLOW) || in_mode(m, RIDE))
             && self.counter >= 0
             && !is_air(&name_at(cx.w, self.mine))
     }
@@ -921,8 +951,11 @@ impl Goal for MineOre {
         let hardness = hardness_at(cx.w, self.mine);
         self.counter = ((20.0 * hardness / MINE_SPEED).floor() as i32).max(0);
         self.total = self.counter.max(1);
-        let at = self.mine.map(|c| f64::from(c) + 0.5);
-        m.nav_move_to(cx.w, at, 1.0);
+        // On its owner's head it digs from where it sits, within reach of the head.
+        if !in_mode(m, RIDE) {
+            let at = self.mine.map(|c| f64::from(c) + 0.5);
+            m.nav_move_to(cx.w, at, 1.0);
+        }
     }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.nav_stop();
