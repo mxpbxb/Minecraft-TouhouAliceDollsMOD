@@ -13,6 +13,7 @@ mod model;
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use horizon_client::mobs::alice_doll_goals as goals;
 use horizon_client::mod_api::{
@@ -178,17 +179,44 @@ static DOLL: AttachmentType<DollData> = AttachmentType {
     sync: false,
 };
 
-/// The dolls seen since the game started: a dying mob's drops name only its id.
-static KNOWN: LazyLock<Mutex<HashMap<u32, &'static Doll>>> = LazyLock::new(Default::default);
+/// What is remembered of each doll seen since the game started: a dying or exploding doll's item
+/// goes to its owner, and by then its attachment may be gone.
+#[derive(Clone, Copy)]
+struct Known {
+    doll: &'static Doll,
+    owner: u128,
+}
 
-fn remember(id: u32, doll: &'static Doll) {
+static KNOWN: LazyLock<Mutex<HashMap<u32, Known>>> = LazyLock::new(Default::default);
+
+fn remember(id: u32, doll: &'static Doll, owner: u128) {
     if let Ok(mut known) = KNOWN.lock() {
-        known.insert(id, doll);
+        known.insert(id, Known { doll, owner });
     }
 }
 
-fn known(id: u32) -> Option<&'static Doll> {
+fn known(id: u32) -> Option<Known> {
     KNOWN.lock().ok()?.get(&id).copied()
+}
+
+/// One right-click reaches the game more than once (each hand asks), so a doll takes one click a
+/// quarter of a second.
+static LAST_CLICK: LazyLock<Mutex<HashMap<u32, Instant>>> = LazyLock::new(Default::default);
+const CLICK_GAP: Duration = Duration::from_millis(250);
+
+fn fresh_click(id: u32) -> bool {
+    let Ok(mut clicks) = LAST_CLICK.lock() else { return true };
+    let now = Instant::now();
+    if clicks.get(&id).is_some_and(|at| now.duration_since(*at) < CLICK_GAP) {
+        return false;
+    }
+    clicks.insert(id, now);
+    true
+}
+
+/// Hands a doll's item to its owner. False when the owner is not here or has no room.
+fn return_to_owner(host: &mut dyn Host, owner: u128, item: &str) -> bool {
+    owner != 0 && host.give_stack(owner, ItemStack::new(item, 1)).is_none()
 }
 
 /// The data a doll is summoned with.
@@ -229,7 +257,7 @@ impl Hooks for Mod {
             host.action_bar(player.uuid, Text::literal(text));
             return Flow::Cancel;
         };
-        remember(id, doll);
+        remember(id, doll, player.uuid);
         let data = DollData { owner: player.uuid, ..DollData::default() };
         let _ = DOLL.set(host, Holder::Entity(id), data);
         goals::set_state(id, data.mode, data.enabled);
@@ -254,6 +282,9 @@ impl Hooks for Mod {
         let Some(player) = host.acting_player() else {
             return Flow::Continue;
         };
+        if !fresh_click(id) {
+            return Flow::Cancel;
+        }
         let mut data = DOLL.get(host, holder).unwrap_or_default();
         let held = event.stack.map(|stack| &*stack.item);
         let name = doll_of(host, id).map_or("Doll", |d| d.name);
@@ -269,6 +300,9 @@ impl Hooks for Mod {
             }
             data.owner = player.uuid;
             data.mode = goals::STANDBY;
+            if let Some(doll) = doll_of(host, id) {
+                remember(id, doll, player.uuid);
+            }
             let _ = DOLL.set(host, holder, data);
             goals::set_state(id, data.mode, data.enabled);
             if let Some(at) = host.entity(id).and_then(|e| host.entity_position(e)) {
@@ -318,6 +352,9 @@ impl Hooks for Mod {
         let (Some(player), Some(doll)) = (host.acting_player(), doll_of(host, id)) else {
             return Flow::Continue;
         };
+        if let Ok(mut known) = KNOWN.lock() {
+            known.remove(&id);
+        }
         host.remove_mob(&player.dimension, id);
         host.give_items(doll.item, 1);
         Flow::Cancel
@@ -329,6 +366,16 @@ impl Hooks for Mod {
 
     /// Tells the goals each doll's state, and passes on what the dolls said.
     fn entity_tick_post(&self, host: &mut dyn Host, event: &mut EntityTickPostEvent<'_>) {
+        for (from, level, text) in goals::take_messages() {
+            let data = DOLL.get(host, Holder::Entity(from)).unwrap_or_default();
+            say(host, from, data, level, &text);
+        }
+        // An Ooedo that blew itself up: its item goes back to its owner.
+        for from in goals::take_spent() {
+            if let Some(k) = known(from) {
+                return_to_owner(host, k.owner, k.doll.item);
+            }
+        }
         if event.kind != KIND {
             return;
         }
@@ -337,30 +384,29 @@ impl Hooks for Mod {
         if !DOLL.has(host, holder).unwrap_or(false) {
             return;
         }
-        if known(id).is_none() {
+        let data = DOLL.get(host, holder).unwrap_or_default();
+        if known(id).is_none_or(|k| k.owner != data.owner) {
             let Some(doll) = doll_of(host, id) else { return };
-            remember(id, doll);
+            remember(id, doll, data.owner);
             // The first version stood by with NoAI, which would stop the goals now.
             if let Some(entity) = host.entity(id) {
                 host.entity_merge_nbt(entity, [("NoAI".into(), Tag::Byte(0))].into());
             }
         }
-        let data = DOLL.get(host, holder).unwrap_or_default();
         goals::set_state(id, data.mode, data.enabled);
-        for (from, level, text) in goals::take_messages() {
-            let data = DOLL.get(host, Holder::Entity(from)).unwrap_or_default();
-            say(host, from, data, level, &text);
-        }
     }
 
-    /// A doll drops itself, not feathers and raw chicken.
-    fn loot_drops(&self, _: &mut dyn Host, event: &mut LootDropsEvent<'_>) {
+    /// A dead doll leaves itself, not feathers and raw chicken, and it goes straight to its owner.
+    /// It drops where it died only when the owner is away or has no room.
+    fn loot_drops(&self, host: &mut dyn Host, event: &mut LootDropsEvent<'_>) {
         let Some((id, KIND)) = event.context.entity else {
             return;
         };
-        if let Some(doll) = known(id) {
+        if let Some(k) = known(id) {
             event.drops.clear();
-            event.drops.push(ItemStack::new(doll.item, 1));
+            if !return_to_owner(host, k.owner, k.doll.item) {
+                event.drops.push(ItemStack::new(k.doll.item, 1));
+            }
         }
     }
 
@@ -372,8 +418,12 @@ impl Hooks for Mod {
         let Some(doll) = event.mob.custom_name.and_then(doll_named) else {
             return Flow::Continue;
         };
-        model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held);
-        Flow::Cancel
+        // Without its texture a doll would be invisible: then it shows as the chicken it is.
+        if model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held) {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
     }
 }
 

@@ -48,8 +48,6 @@ const SEARCH_HEIGHT: f64 = 8.0;
 /// A stone sword's hit (the original's `attackStrength` was 2), and the 9.0 its squared reach is
 /// compared with.
 const ATTACK_STRENGTH: f32 = 5.0;
-/// How much faster than a chicken a doll moves.
-const SPEED_SCALE: f64 = 1.0;
 const REACH_SQR: f64 = 6.25;
 /// How often a doll looks for a target, re-paths to it, and can strike it, in ticks.
 const SCAN_EVERY: i64 = 10;
@@ -88,6 +86,19 @@ pub fn take_messages() -> Vec<(u32, u8, String)> {
 fn say(id: u32, level: u8, text: impl Into<String>) {
     if let Ok(mut messages) = MESSAGES.lock() {
         messages.push((id, level, text.into()));
+    }
+}
+
+/// Dolls used up since the last call (an Ooedo that exploded), whose items go back to their owners.
+static SPENT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+pub fn take_spent() -> Vec<u32> {
+    SPENT.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default()
+}
+
+fn spend(id: u32) {
+    if let Ok(mut spent) = SPENT.lock() {
+        spent.push(id);
     }
 }
 
@@ -159,7 +170,6 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
         kind.sounds = ["", "", ""];
         kind.step_sound = None;
     }
-    m.attrs.speed = m.kind.speed * SPEED_SCALE;
     let Some(state) = state(m.id) else { return };
     m.no_gravity = state.mode == RIDE;
     if state.mode == RIDE && state.enabled {
@@ -941,10 +951,9 @@ impl Goal for MineOre {
 const EXPLODE_STRENGTH: f32 = 3.0;
 /// Ticks of fuse once close, as a creeper's.
 const FUSE: i32 = 30;
-const OOEDO_ITEM: &str = "alice_dolls:ooedo_doll";
 
 /// On patrol, walks up to the nearest hostile mob, fuses for a second and a half, and explodes,
-/// leaving its item behind.
+/// its item going back to its owner.
 #[derive(Clone, Debug, Default)]
 struct Explode {
     target: Option<u32>,
@@ -1002,8 +1011,7 @@ impl Goal for Explode {
         }
         if self.fuse >= FUSE {
             cx.events.push(MobEvent::Explode(me, EXPLODE_STRENGTH, Species::Chicken));
-            let item = Arc::from(OOEDO_ITEM);
-            cx.events.push(MobEvent::DropItem { mob: m.id, item, count: 1, at: me });
+            spend(m.id);
             m.removed = true;
         }
     }

@@ -110,10 +110,13 @@ pub fn faces(b: &ModelBox) -> [Face; 6] {
     ]
 }
 
-fn draw_box(host: &dyn Host, draw: &mut BlockEntityDraw, sprite: &str, b: &ModelBox, tint: u32) {
+/// False when nothing could be drawn: the sprite is not in the atlas.
+fn draw_box(host: &dyn Host, draw: &mut BlockEntityDraw, sprite: &str, b: &ModelBox, tint: u32) -> bool {
+    let mut drawn = false;
     for face in faces(b) {
-        host.draw_quad(draw, sprite, face.corners, face.uv, tint);
+        drawn |= host.draw_quad(draw, sprite, face.corners, face.uv, tint);
     }
+    drawn
 }
 
 /// Draws a box turned about x through its own pivot.
@@ -138,7 +141,7 @@ pub fn draw_doll(
     draw: &mut BlockEntityDraw,
     sprite: &str,
     held: &str,
-) {
+) -> bool {
     // The vanilla hurt flash: red while it lasts.
     let tint = if mob.hurt_time > 0 || mob.death_time > 0 { 0xFF_80_80 } else { 0xFF_FF_FF };
 
@@ -164,7 +167,10 @@ pub fn draw_doll(
     };
     let left_arm = (phase + std::f32::consts::PI).cos() * mob.walk_speed;
 
-    draw_box(host, draw, sprite, &BODY, tint);
+    if !draw_box(host, draw, sprite, &BODY, tint) {
+        draw.pop();
+        return false;
+    }
     draw_box(host, draw, sprite, &SKIRT_1, tint);
     draw_box(host, draw, sprite, &SKIRT_2, tint);
     draw_swung(host, draw, sprite, &RIGHT_LEG, degrees(leg), tint);
@@ -192,6 +198,7 @@ pub fn draw_doll(
     draw.pop();
 
     draw.pop();
+    true
 }
 
 #[cfg(test)]
