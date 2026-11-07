@@ -1,0 +1,47 @@
+# Alice's Dolls for the eltanschauung/horizon fork, built by its launcher: `horizon-launcher native-build`.
+# The doll is a named chicken this mod draws and drives: the fork has no living mod entity types and no
+# register_goals hook, so its goals are swapped in through the injection below.
+[mod]
+id = "alice_dolls"
+version = "0.1.0"
+
+[compatibility]
+horizon_revision = "8d5195563cab0ad1e7e7c8d488f45bc6e9f20db8"
+
+[api]
+path = "api"
+
+[[module]]
+id = "goals"
+file = "crates/horizon-client/src/mobs.rs"
+name = "alice_doll_goals"
+visibility = "pub"
+source = "goals.rs"
+
+[[injection]]
+id = "doll-goals"
+kind = "HEAD"
+target = "horizon_client_lib::mobs::ai::pre_tick"
+helper = "goal_swap.rs"
+bindings = [
+  { name = "m", ty = "&mut crate::mobs::Mob", value = "&mut *m" },
+  { name = "w", ty = "&crate::mobs::MobWorld<'_>", value = "w" },
+]
+
+# Mob.voice plays ambient sounds without checking Silent: a doll says nothing at all.
+[[injection]]
+id = "doll-voice"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client_lib::mobs::Mob::voice"
+helper = "doll_voice.rs"
+bindings = [{ name = "m", ty = "&crate::mobs::Mob", value = "&*self" }]
+
+# A doll lays no eggs, and makes no plop.
+[[injection]]
+id = "doll-egg"
+kind = "HEAD"
+cancellable = true
+target = "horizon_client_lib::mobs::farm::chicken_egg_step"
+helper = "doll_egg.rs"
+bindings = [{ name = "m", ty = "&crate::mobs::Mob", value = "&*m" }]

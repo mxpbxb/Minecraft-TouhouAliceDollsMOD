@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["SW ", "WHW", " W "],
+  "key": {
+    "S": "minecraft:golden_sword",
+    "W": "#minecraft:wool",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": { "id": "alice_dolls:shanghai_doll" }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["TW ", "WHW", " W "],
+  "key": {
+    "T": "minecraft:tnt",
+    "W": "#minecraft:wool",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": { "id": "alice_dolls:ooedo_doll" }
+}

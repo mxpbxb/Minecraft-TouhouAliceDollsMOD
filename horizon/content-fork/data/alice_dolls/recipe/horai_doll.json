@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["SW ", "WHW", " W "],
+  "key": {
+    "S": "minecraft:golden_pickaxe",
+    "W": "#minecraft:wool",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": { "id": "alice_dolls:horai_doll" }
+}
