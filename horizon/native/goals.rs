@@ -1,6 +1,6 @@
 // The dolls' goals, compiled into the game as crate::mobs::alice_doll_goals. The priorities and
 // numbers are the original mod's: DollBase.onInitializeAI, each doll's onInitializeAI, and their AI
-// classes. Horai's and Ooedo's jobs are at the end.
+// classes. Horai's, Ooedo's, Germany's and London's jobs are at the end.
 //
 // The mod's api crate owns what is saved (owner, mode, chat level). It tells this module each doll's
 // state through `set_state`, and collects what the dolls have to say through `take_messages`.
@@ -14,12 +14,16 @@ use std::sync::{Arc, LazyLock, Mutex};
 pub const SHANGHAI: &str = "Shanghai Doll";
 pub const HORAI: &str = "Horai Doll";
 pub const OOEDO: &str = "Ooedo Doll";
+pub const GERMANY: &str = "Germany Doll";
+pub const LONDON: &str = "London Doll";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Shanghai,
     Horai,
     Ooedo,
+    Germany,
+    London,
 }
 
 fn kind_of(m: &Mob) -> Option<Kind> {
@@ -30,6 +34,8 @@ fn kind_of(m: &Mob) -> Option<Kind> {
         SHANGHAI => Some(Kind::Shanghai),
         HORAI => Some(Kind::Horai),
         OOEDO => Some(Kind::Ooedo),
+        GERMANY => Some(Kind::Germany),
+        LONDON => Some(Kind::London),
         _ => None,
     }
 }
@@ -200,6 +206,13 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
         }
         Kind::Ooedo => {
             ai.goals.add(4, Explode::default());
+        }
+        // PlantTree needs a sapling from the doll's inventory, which is not ported yet.
+        Kind::Germany => {
+            ai.goals.add(10, CutTree::default());
+        }
+        Kind::London => {
+            ai.goals.add(11, ReportSpawners::default());
         }
     }
     ai.goals.add(12, DollFollow { recalculate_in: 0 });
@@ -1024,5 +1037,262 @@ impl Goal for Explode {
     }
     fn name(&self) -> &'static str {
         "Explode"
+    }
+}
+
+// ---- Germany: EntityDollAICutTree ----
+
+/// `cutRange` and `cutSpeed`: how far Germany looks for a tree, and how fast it chops.
+const CUT_RANGE: i32 = 5;
+const CUT_SPEED: f32 = 2.5;
+
+/// `logBlockRegex` (`log|mushroom`): logs, nether stems, and giant mushrooms.
+fn is_log(name: &str) -> bool {
+    name.ends_with("_log") || name.ends_with("_stem") || name.contains("mushroom")
+}
+
+/// `leavesBlockRegex` (`leaves|mushroom|vine`).
+fn is_leafy(name: &str) -> bool {
+    name.contains("leaves") || name.contains("mushroom") || name.contains("vine") || name.ends_with("_wart_block")
+}
+
+/// On patrol or following, finds a tree (a trunk with leaves around it), hops to its top, and
+/// chops it down layer by layer.
+#[derive(Clone, Debug, Default)]
+struct CutTree {
+    /// The trunk's top block still standing, and what it is made of.
+    target: [i32; 3],
+    log: Option<Arc<str>>,
+    cut: [i32; 3],
+    counter: i32,
+    strength: i32,
+    last_scan: i64,
+}
+
+impl CutTree {
+    /// The nearest trunk with at least four leaves beside it: its top block, the leaves beside it
+    /// and how tall it is.
+    fn find(&self, m: &Mob, w: &MobWorld) -> Option<([i32; 3], Arc<str>, u32, u32)> {
+        let [x, y, z] = eye_block(m);
+        let mut best: Option<([i32; 3], Arc<str>, u32, u32)> = None;
+        let mut best_steps = i32::MAX;
+        for dx in -CUT_RANGE..=CUT_RANGE {
+            for dz in -CUT_RANGE..=CUT_RANGE {
+                let steps = dx.abs() + dz.abs();
+                if steps > CUT_RANGE || steps >= best_steps {
+                    continue;
+                }
+                let log = name_at(w, [x + dx, y, z + dz]);
+                if !is_log(&log) {
+                    continue;
+                }
+                let mut ty = y;
+                while ty > WORLD_BOTTOM && name_at(w, [x + dx, ty - 1, z + dz]) == log {
+                    ty -= 1;
+                }
+                let (mut height, mut leaves) = (0, 0);
+                while name_at(w, [x + dx, ty, z + dz]) == log {
+                    for (ox, oz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        if is_leafy(&name_at(w, [x + dx + ox, ty, z + dz + oz])) {
+                            leaves += 1;
+                        }
+                    }
+                    height += 1;
+                    ty += 1;
+                }
+                if leaves >= 4 {
+                    best = Some(([x + dx, ty - 1, z + dz], log, leaves, height));
+                    best_steps = steps;
+                }
+            }
+        }
+        best
+    }
+}
+
+impl Goal for CutTree {
+    fn flags(&self) -> u8 {
+        goals::MOVE | goals::LOOK
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !(in_mode(m, PATROL) || in_mode(m, FOLLOW)) || cx.w.game_time - self.last_scan < 20 {
+            return false;
+        }
+        self.last_scan = cx.w.game_time;
+        let Some((top, log, leaves, height)) = self.find(m, cx.w) else {
+            say(m.id, 2, "No target");
+            return false;
+        };
+        say(m.id, 1, format!("Target[{leaves},{height}]"));
+        self.target = top;
+        self.log = Some(log);
+        // `teleportToXYZ`: onto the top of the trunk.
+        m.position.x = f64::from(top[0]) + 0.5;
+        m.position.y = f64::from(top[1] + 1);
+        m.position.z = f64::from(top[2]) + 0.5;
+        m.previous = m.position;
+        m.nav_stop();
+        cx.events.push(MobEvent::Sound("entity.enderman.teleport", here(m), 1.0, 1.0));
+        true
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        let near = (m.position.x.floor() as i32 - self.target[0]).abs()
+            + (m.position.y.floor() as i32 - self.target[1]).abs()
+            + (m.position.z.floor() as i32 - self.target[2]).abs()
+            <= CUT_RANGE;
+        (in_mode(m, PATROL) || in_mode(m, FOLLOW)) && self.log.is_some() && near
+    }
+    fn start(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.counter = 0;
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.log = None;
+        cx.events.push(MobEvent::DestroyProgress { mob: m.id, pos: self.cut, progress: -1 });
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(log) = self.log.clone() else { return };
+        let w = cx.w;
+        if self.counter == 0 {
+            // Another log of this layer within reach first (branches, a wide trunk), else the trunk,
+            // a layer lower each time.
+            let [tx, ty, tz] = self.target;
+            let mut branch = None;
+            'search: for dx in -CUT_RANGE..=CUT_RANGE {
+                for dz in -CUT_RANGE..=CUT_RANGE {
+                    if dx.abs() + dz.abs() <= CUT_RANGE && name_at(w, [tx + dx, ty, tz + dz]) == log {
+                        branch = Some([tx + dx, ty, tz + dz]);
+                        break 'search;
+                    }
+                }
+            }
+            match branch {
+                Some(at) => self.cut = at,
+                None => {
+                    self.cut = self.target;
+                    self.target[1] -= 1;
+                    if name_at(w, self.target) != log {
+                        self.log = None;
+                        return;
+                    }
+                }
+            }
+            let hardness = hardness_at(w, self.cut);
+            self.strength = ((1.0 + 30.0 * hardness / CUT_SPEED).floor() as i32).max(0);
+        }
+        let at = self.cut.map(|c| f64::from(c) + 0.5);
+        m.look_at(at);
+        if self.counter >= self.strength {
+            cx.events.push(MobEvent::BreakBlock { pos: self.cut, drop: true });
+            self.counter = 0;
+            return;
+        }
+        let progress = (self.counter * 10 / self.strength.max(1)).min(9);
+        cx.events.push(MobEvent::DestroyProgress { mob: m.id, pos: self.cut, progress });
+        if self.counter % 4 == 0 {
+            let [x, y, z] = self.cut;
+            let facts = w.facts.get(w.world.block(x, y, z));
+            let sound = facts.sounds.break_sound.to_string();
+            let volume = (facts.sounds.volume + 1.0) / 8.0;
+            let pitch = facts.sounds.pitch * 0.5;
+            cx.events.push(MobEvent::SoundId(sound, at, volume, pitch));
+        }
+        if self.counter % 6 == 0 {
+            m.swing();
+            mark_swing(m.id);
+        }
+        self.counter += 1;
+    }
+    fn box_clone(&self) -> Box<dyn Goal> {
+        Box::new(self.clone())
+    }
+    fn name(&self) -> &'static str {
+        "CutTree"
+    }
+}
+
+// ---- London: EntityDollAIReportArtifact ----
+
+/// In any mode, sweeps the layers above and below it, 64 each way, over the chunks around it, one
+/// layer a tick, and reports where the spawners are: `-` every 8 layers, a `[spawner]` at each
+/// layer that has one, and `<->` at its own height (the original showed the stronghold's direction
+/// there; Horizon gives a mob no way to find it).
+#[derive(Clone, Debug, Default)]
+struct ReportSpawners {
+    counter: i32,
+    chunk: [i32; 2],
+    base_y: i32,
+    found: BTreeMap<i32, Vec<String>>,
+}
+
+impl Goal for ReportSpawners {
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        state(m.id).is_some_and(|s| s.enabled)
+    }
+    fn start(&mut self, _: &mut Mob, _: &mut Cx) {
+        self.counter = 0;
+    }
+    fn every_tick(&self) -> bool {
+        true
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if self.counter == 0 {
+            self.chunk = [(m.position.x.floor() as i32).div_euclid(16), (m.position.z.floor() as i32).div_euclid(16)];
+            self.base_y = (m.position.y + m.kind.eye_height).floor() as i32;
+            self.found.clear();
+        }
+        let [cx0, cz0] = self.chunk;
+        for dy in [-1, 1] {
+            if self.counter == 0 && dy == 1 {
+                continue;
+            }
+            let layer = self.counter * dy;
+            let y = self.base_y + layer;
+            for dx in -16..=32 {
+                for dz in -16..=32 {
+                    let name = name_at(cx.w, [cx0 * 16 + dx, y, cz0 * 16 + dz]);
+                    if matches!(&*name, "minecraft:spawner" | "minecraft:trial_spawner") {
+                        self.found.entry(layer).or_default().push(short(&name).to_owned());
+                    }
+                }
+            }
+        }
+        if self.counter == 63 {
+            let mut text = String::new();
+            let mark = |text: &mut String, layer: i32, found: &BTreeMap<i32, Vec<String>>| {
+                if let Some(names) = found.get(&layer) {
+                    text.push_str(&format!("[{}]", names.join(",")));
+                }
+            };
+            for i in (1..=64).rev() {
+                if i % 8 == 0 {
+                    text.push('-');
+                }
+                mark(&mut text, i, &self.found);
+            }
+            match self.found.get(&0) {
+                Some(names) => text.push_str(&format!("<[{}]>", names.join(","))),
+                None => text.push_str("<->"),
+            }
+            for i in (-64..=-1).rev() {
+                mark(&mut text, i, &self.found);
+                if i % 8 == 0 {
+                    text.push('-');
+                }
+            }
+            say(m.id, 2, text);
+        }
+        self.counter = (self.counter + 1) % 64;
+    }
+    fn box_clone(&self) -> Box<dyn Goal> {
+        Box::new(self.clone())
+    }
+    fn name(&self) -> &'static str {
+        "ReportSpawners"
     }
 }

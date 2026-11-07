@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["EW ", "WHW", " W "],
+  "key": {
+    "E": "minecraft:ender_eye",
+    "W": "#minecraft:wool",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": { "id": "alice_dolls:london_doll" }
+}

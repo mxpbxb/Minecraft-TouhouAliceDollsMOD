@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["AW ", "WHW", " W "],
+  "key": {
+    "A": "minecraft:golden_axe",
+    "W": "#minecraft:wool",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": { "id": "alice_dolls:germany_doll" }
+}

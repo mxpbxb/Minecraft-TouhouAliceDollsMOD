@@ -1,7 +1,7 @@
 //! Alice's Dolls for the eltanschauung/horizon fork: a port of the 1.7.10 mod by iwa_yukinoshita.
 //!
 //! Alice's dolls: Shanghai fights and steals, Horai finds and mines ore, Ooedo blows itself up
-//! next to monsters. Right-click it empty-handed to go Standby, Patrol, Follow, Rideon and back to
+//! next to monsters, Germany chops trees, London finds spawners. Right-click it empty-handed to go Standby, Patrol, Follow, Rideon and back to
 //! Standby; with a Doll Core to switch its AI on and off, or to take over someone else's doll; with
 //! a book to change how much it says. Hit it with a Doll Core, or kill it, to get the item back.
 //!
@@ -36,7 +36,7 @@ pub struct Doll {
     held: &'static str,
 }
 
-const DOLLS: [Doll; 3] = [
+const DOLLS: [Doll; 5] = [
     Doll {
         name: goals::SHANGHAI,
         item: "alice_dolls:shanghai_doll",
@@ -54,6 +54,18 @@ const DOLLS: [Doll; 3] = [
         item: "alice_dolls:ooedo_doll",
         sprite: "alice_dolls:entity/ooedo",
         held: "minecraft:tnt",
+    },
+    Doll {
+        name: goals::GERMANY,
+        item: "alice_dolls:germany_doll",
+        sprite: "alice_dolls:entity/germany",
+        held: "minecraft:golden_axe",
+    },
+    Doll {
+        name: goals::LONDON,
+        item: "alice_dolls:london_doll",
+        sprite: "alice_dolls:entity/london",
+        held: "minecraft:ender_eye",
     },
 ];
 
