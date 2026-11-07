@@ -8,6 +8,7 @@ use super::goals::{self, Cx, Goal};
 use super::{Damage, Mob, MobEvent, MobWorld, Seen, Species, Who};
 use horizon_core::random::RandomSource;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 /// The names that make a chicken a doll, and which doll. The api crate uses these too.
@@ -56,6 +57,8 @@ const SEARCH_HEIGHT: f64 = 8.0;
 /// compared with.
 const ATTACK_STRENGTH: f32 = 5.0;
 const REACH_SQR: f64 = 6.25;
+/// How far a fighting doll strikes: five blocks across.
+const ATTACK_REACH_SQR: f64 = 25.0;
 /// How often a doll looks for a target, re-paths to it, and can strike it, in ticks.
 const SCAN_EVERY: i64 = 10;
 const PATH_EVERY: i64 = 5;
@@ -192,6 +195,25 @@ pub fn is_doll_mob(m: &Mob) -> bool {
     kind_of(m).is_some()
 }
 
+/// A player has 20 health: every doll has half as much again.
+const DOLL_HEALTH: f32 = 30.0;
+/// The Goliath doll, once it is ported, has three times a player's.
+#[allow(dead_code)]
+const GOLIATH_HEALTH: f32 = 60.0;
+
+fn max_health(kind: Kind) -> f32 {
+    match kind {
+        Kind::Shanghai | Kind::Horai | Kind::Ooedo | Kind::Germany | Kind::London => DOLL_HEALTH,
+    }
+}
+
+static SNEAKING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the player was sneaking at the last doll's tick.
+pub fn player_sneaking() -> bool {
+    SNEAKING.load(Ordering::Relaxed)
+}
+
 fn tick_doll(m: &mut Mob, w: &MobWorld) {
     let Some(kind) = kind_of(m) else { return };
     // Silent stops the hurt, death and step sounds; the doll-voice hook stops the rest.
@@ -205,6 +227,18 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
     }
     // Every walk and run of a doll scales from this.
     m.attrs.speed = m.kind.speed * SPEED_SCALE;
+    // A doll is sturdier than a chicken: a doll placed before this gets its new health in full.
+    let health = max_health(kind);
+    if m.attrs.max_health != health {
+        m.attrs.max_health = health;
+        if m.alive() {
+            m.health = health;
+        }
+    }
+    // Whether the player is sneaking, for the api crate's shift-click pickup.
+    if let Some(p) = w.player.as_ref() {
+        SNEAKING.store(p.sneaking, Ordering::Relaxed);
+    }
     let Some(state) = state(m.id) else { return };
     m.no_gravity = state.mode == RIDE;
     if state.mode == RIDE && state.enabled {
@@ -406,11 +440,20 @@ fn enemy(s: &Seen) -> bool {
     patrol_target(s) && !is_doll(s.id)
 }
 
-/// Close enough to hit: two and a half blocks across, and up to three above or below, so a
-/// low-flying fairy or phantom can be reached.
+/// Close enough to steal: two and a half blocks across, and up to three above or below.
 fn in_reach(m: &Mob, at: [f64; 3]) -> bool {
+    within(m, at, REACH_SQR, 3.0)
+}
+
+/// Close enough to strike: five blocks across, and up to four above or below, so a big mob the
+/// path stops short of, or a low-flying fairy or phantom, can still be hit.
+fn in_strike_reach(m: &Mob, at: [f64; 3]) -> bool {
+    within(m, at, ATTACK_REACH_SQR, 4.0)
+}
+
+fn within(m: &Mob, at: [f64; 3], across_sqr: f64, up: f64) -> bool {
     let (dx, dy, dz) = (m.position.x - at[0], m.position.y - at[1], m.position.z - at[2]);
-    dx * dx + dz * dz < REACH_SQR && dy.abs() < 3.0
+    dx * dx + dz * dz < across_sqr && dy.abs() < up
 }
 
 impl Goal for DollAttack {
@@ -472,7 +515,7 @@ impl Goal for DollAttack {
             self.last_path = cx.w.game_time;
             m.nav_move_to_entity(cx.w, at, 0, 1.0);
         }
-        if alive && in_reach(m, at) && cx.w.game_time - self.last_hit >= HIT_EVERY {
+        if alive && in_strike_reach(m, at) && cx.w.game_time - self.last_hit >= HIT_EVERY {
             self.last_hit = cx.w.game_time;
             m.swing();
             mark_swing(m.id);

@@ -13,7 +13,7 @@ The original Java source is in the version folders of this repository. This fold
 
 | Doll | Crafted with | What it does |
 |---|---|---|
-| Shanghai | golden sword | Fights hostile mobs (from your head too), shears sheep and steals from animals, reports the mobs around it |
+| Shanghai | golden sword | Fights hostile mobs within 5 blocks (from your head too), shears sheep and steals from animals, reports the mobs around it |
 | Horai | golden pickaxe | Reports the ore within 3 blocks and digs its way to it, even from your head |
 | Diamond Horai | diamond pickaxe | The same as Horai for now |
 | Ooedo | TNT | On patrol, walks up to the nearest hostile mob and explodes |
@@ -23,7 +23,8 @@ The original Java source is in the version folders of this repository. This fold
 Each recipe is the item in the top left, wool, and a Doll Core in the middle. Right-click a doll
 empty-handed to switch modes: Standby, Patrol, Follow, Rideon. Right-click with a Doll Core to turn
 its AI on or off, with a book to change how much it says, or with a chest to open its 9-slot
-inventory. Hit it with a Doll Core to pick it up. A doll's item can't be burnt, blown up or despawned,
+inventory. Sneak and right-click it empty-handed, or hit it with a Doll Core, to pick it up. Every
+doll has 30 health, half as much again as a player. A doll's item can't be burnt, blown up or despawned,
 and a dead doll's item and inventory go to its owner.
 
 ## How it works on the fork

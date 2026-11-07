@@ -4,7 +4,8 @@
 //! next to monsters, Germany chops trees, London finds spawners. Right-click one empty-handed to go
 //! Standby, Patrol, Follow, Rideon and back to Standby; with a Doll Core to switch its AI on and
 //! off, or to take over someone else's doll; with a book to change how much it says; with a chest
-//! to open its inventory. Hit it with a Doll Core, or kill it, to get the item back.
+//! to open its inventory. Sneak and right-click it empty-handed, hit it with a Doll Core, or kill it,
+//! to get the item back.
 //!
 //! The fork has no living mod entity types, so a doll is a silent chicken with a custom name:
 //! this mod draws it, and `goals.rs` drives it. A chicken is close to the doll's size and falls
@@ -93,7 +94,8 @@ fn doll_of(host: &dyn Host, id: u32) -> Option<&'static Doll> {
     doll_named(&name)
 }
 
-const HEALTH: f32 = 8.0;
+/// Half as much again as a player's 20: `goals.rs` keeps every doll at this.
+const HEALTH: f32 = 30.0;
 /// The original's starting state bits, 528: chat level 2.
 const DEFAULT_CHAT_LEVEL: u8 = 2;
 
@@ -270,6 +272,19 @@ fn belongings(k: &Known) -> Vec<ItemStack> {
     all
 }
 
+/// A line in `alice_dolls-debug.log` in the game folder: what happened when a doll item was used,
+/// to find out why some will not place.
+fn debug(host: &dyn Host, line: &str) {
+    use std::io::Write;
+    let path = host.instance_dir().join("alice_dolls-debug.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let _ = writeln!(file, "{secs} {line}");
+    }
+}
+
 /// The data a doll is summoned with.
 fn doll_nbt(doll: &Doll) -> Compound {
     let max_health: Compound = [
@@ -361,10 +376,15 @@ impl Mod {
 impl Hooks for Mod {
     /// Places a doll from its item.
     fn use_item_on(&self, host: &mut dyn Host, event: &mut UseItemOnEvent<'_>) -> Flow {
-        let Some(doll) = doll_for_item(&event.stack.item) else {
+        let item = event.stack.item.to_string();
+        if item.starts_with("alice_dolls:") {
+            debug(host, &format!("use_item_on {item} at {:?} face {:?}", event.pos, event.face));
+        }
+        let Some(doll) = doll_for_item(&item) else {
             return Flow::Continue;
         };
         let Some(player) = host.acting_player() else {
+            debug(host, &format!("  {item}: no acting player"));
             return Flow::Continue;
         };
         let at = [
@@ -372,7 +392,9 @@ impl Hooks for Mod {
             f64::from(event.pos[1] + event.face[1]),
             f64::from(event.pos[2] + event.face[2]) + 0.5,
         ];
-        let Some(id) = host.summon(&player.dimension, KIND, at, doll_nbt(doll)) else {
+        let summoned = host.summon(&player.dimension, KIND, at, doll_nbt(doll));
+        debug(host, &format!("  {item}: summon in {} at {at:?} -> {summoned:?}", player.dimension));
+        let Some(id) = summoned else {
             let text = format!("{} : there is no room here", doll.name);
             host.action_bar(player.uuid, Text::literal(text));
             return Flow::Cancel;
@@ -429,6 +451,17 @@ impl Hooks for Mod {
             }
             say(host, id, &data, 2, "Activation successful!");
             let _ = DOLL.set(host, holder, data);
+            return Flow::Cancel;
+        }
+        if held.is_none() && goals::player_sneaking() {
+            // Sneak and right-click with an empty hand: the doll comes back as its item, with what
+            // it carries.
+            if let Some(doll) = doll_of(host, id) {
+                forget(id);
+                host.remove_mob(&player.dimension, id);
+                let k = Known { doll, owner: player.uuid, items: data.items };
+                give_to_owner(host, player.uuid, belongings(&k));
+            }
             return Flow::Cancel;
         }
         match held {
@@ -694,6 +727,6 @@ mod tests {
         let nbt = doll_nbt(&DOLLS[1]);
         assert!(matches!(nbt.get(&"Silent".into()), Some(Tag::Byte(1))));
         assert!(matches!(nbt.get(&"CustomName".into()), Some(Tag::String(_))));
-        assert!(matches!(nbt.get(&"Health".into()), Some(Tag::Float(b)) if *b == 8.0f32.to_bits()));
+        assert!(matches!(nbt.get(&"Health".into()), Some(Tag::Float(b)) if *b == 30.0f32.to_bits()));
     }
 }

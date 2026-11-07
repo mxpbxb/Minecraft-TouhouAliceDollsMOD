@@ -1,6 +1,6 @@
 id = "alice_dolls"
 name = "Alice's Dolls"
-version = "0.2.0"
+version = "0.3.0"
 description = "Private work-in-progress port of Alice's Dolls (1.7.10-kog3) by iwa_yukinoshita. Not for redistribution without the author's permission."
 authors = ["iwa_yukinoshita (original mod)"]
 api = "0.2"
