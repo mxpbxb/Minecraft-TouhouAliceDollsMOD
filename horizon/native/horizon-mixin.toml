@@ -6,7 +6,7 @@ id = "alice_dolls"
 version = "0.3.0"
 
 [compatibility]
-horizon_revision = "8d5195563cab0ad1e7e7c8d488f45bc6e9f20db8"
+horizon_revision = "a85962d7ea315a807d63d4a220f3ef65db5cfb5a"
 
 [api]
 path = "api"
