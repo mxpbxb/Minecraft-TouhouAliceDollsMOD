@@ -1,7 +1,9 @@
 //! Alice's Dolls for the eltanschauung/horizon fork: a port of the 1.7.10 mod by iwa_yukinoshita.
 //!
 //! Alice's dolls: Shanghai fights and steals, Horai finds and mines ore, Ooedo blows itself up
-//! next to monsters, Germany chops trees, London finds spawners. Right-click one empty-handed to go
+//! next to monsters, Germany chops trees, London finds spawners, Russia gathers what is dropped and
+//! lights the dark with torches. The extras: Marisa and Reimu shoot danmaku, Aya takes photos,
+//! Goliath fights, Yuuka farms; Grand Guignol and Wakasagi keep you company. Right-click one empty-handed to go
 //! Standby, Patrol, Follow, Rideon and back to Standby; with a Doll Core to switch its AI on and
 //! off, or to take over someone else's doll; with a book to change how much it says; with a chest
 //! to open its inventory. Sneak and right-click it empty-handed, hit it with a Doll Core, or kill it,
@@ -31,52 +33,88 @@ const DOLL_CORE: &str = "alice_dolls:doll_core";
 /// `DollBase.getSizeInventory`: one row.
 const INVENTORY: usize = 9;
 
-/// One of the dolls: the name that makes a chicken this doll, its item, its texture, and what it
-/// holds (`getHeldItem`).
-#[derive(Debug, PartialEq, Eq)]
+/// One of the dolls: the name that makes a chicken this doll, its item, its texture, what it holds
+/// (`getHeldItem`, empty for nothing), how many slots its inventory has (`getSizeInventory`), and
+/// how it is drawn.
+#[derive(Debug)]
 pub struct Doll {
     name: &'static str,
     item: &'static str,
     sprite: &'static str,
     held: &'static str,
+    slots: usize,
+    look: model::Look,
 }
 
-const DOLLS: [Doll; 6] = [
+impl PartialEq for Doll {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+const fn base(name: &'static str, item: &'static str, sprite: &'static str, held: &'static str) -> Doll {
+    Doll { name, item, sprite, held, slots: INVENTORY, look: model::Look::Base }
+}
+
+static DOLLS: [Doll; 14] = [
+    base(goals::SHANGHAI, "alice_dolls:shanghai_doll", "alice_dolls:entity/shanghai", "minecraft:golden_sword"),
+    base(goals::HORAI, "alice_dolls:horai_doll", "alice_dolls:entity/horai", "minecraft:golden_pickaxe"),
+    base(goals::DIAMOND_HORAI, "alice_dolls:diamond_horai_doll", "alice_dolls:entity/horai", "minecraft:diamond_pickaxe"),
+    base(goals::OOEDO, "alice_dolls:ooedo_doll", "alice_dolls:entity/ooedo", "minecraft:tnt"),
+    base(goals::GERMANY, "alice_dolls:germany_doll", "alice_dolls:entity/germany", "minecraft:golden_axe"),
+    base(goals::LONDON, "alice_dolls:london_doll", "alice_dolls:entity/london", "minecraft:ender_eye"),
+    // Russia carries four rows.
+    Doll { slots: 36, ..base(goals::RUSSIA, "alice_dolls:russia_doll", "alice_dolls:entity/russia", "minecraft:chest") },
+    base(goals::GRAND_GUIGNOL, "alice_dolls:grand_guignol_doll", "alice_dolls:entity/grandguignol", ""),
+    // The extras carry two rows. Their items were thKaguya's: Lunatic has Aya's fan, Yuuka's
+    // parasol and a yin-yang orb; Marisa's mini-hakkero is a fire charge here.
     Doll {
-        name: goals::SHANGHAI,
-        item: "alice_dolls:shanghai_doll",
-        sprite: "alice_dolls:entity/shanghai",
-        held: "minecraft:golden_sword",
+        name: goals::MARISA,
+        item: "alice_dolls:marisa_doll",
+        sprite: "alice_dolls:entity/marisa",
+        held: "minecraft:fire_charge",
+        slots: 18,
+        look: model::Look::Boxes(&model::MARISA),
     },
     Doll {
-        name: goals::HORAI,
-        item: "alice_dolls:horai_doll",
-        sprite: "alice_dolls:entity/horai",
-        held: "minecraft:golden_pickaxe",
+        name: goals::REIMU,
+        item: "alice_dolls:reimu_doll",
+        sprite: "alice_dolls:entity/reimu",
+        held: "lunatic:yin_yang_orb_homing",
+        slots: 18,
+        look: model::Look::Boxes(&model::REIMU),
     },
     Doll {
-        name: goals::DIAMOND_HORAI,
-        item: "alice_dolls:diamond_horai_doll",
-        sprite: "alice_dolls:entity/horai",
-        held: "minecraft:diamond_pickaxe",
+        name: goals::AYA,
+        item: "alice_dolls:aya_doll",
+        sprite: "alice_dolls:entity/aya",
+        held: "lunatic:hauchiwa_fan",
+        slots: 18,
+        look: model::Look::Boxes(&model::AYA),
     },
     Doll {
-        name: goals::OOEDO,
-        item: "alice_dolls:ooedo_doll",
-        sprite: "alice_dolls:entity/ooedo",
-        held: "minecraft:tnt",
+        name: goals::WAKASAGI,
+        item: "alice_dolls:wakasagi_doll",
+        sprite: "alice_dolls:entity/wakasagi",
+        held: "",
+        slots: 18,
+        look: model::Look::Boxes(&model::WAKASAGI),
     },
     Doll {
-        name: goals::GERMANY,
-        item: "alice_dolls:germany_doll",
-        sprite: "alice_dolls:entity/germany",
-        held: "minecraft:golden_axe",
+        name: goals::GOLIATH,
+        item: "alice_dolls:goliath_doll",
+        sprite: "alice_dolls:entity/goliath",
+        held: "minecraft:diamond_sword",
+        slots: INVENTORY,
+        look: model::Look::Boxes(&model::GOLIATH),
     },
     Doll {
-        name: goals::LONDON,
-        item: "alice_dolls:london_doll",
-        sprite: "alice_dolls:entity/london",
-        held: "minecraft:ender_eye",
+        name: goals::YUUKA,
+        item: "alice_dolls:yuuka_doll",
+        sprite: "alice_dolls:entity/yuuka",
+        held: "lunatic:yuuka_parasol",
+        slots: 18,
+        look: model::Look::Boxes(&model::YUUKA),
     },
 ];
 
@@ -94,8 +132,12 @@ fn doll_of(host: &dyn Host, id: u32) -> Option<&'static Doll> {
     doll_named(&name)
 }
 
-/// Half as much again as a player's 20: `goals.rs` keeps every doll at this.
+/// Half as much again as a player's 20: `goals.rs` keeps every doll at this, and Goliath at twice it.
 const HEALTH: f32 = 30.0;
+
+fn health_of(doll: &Doll) -> f32 {
+    if doll.name == goals::GOLIATH { 2.0 * HEALTH } else { HEALTH }
+}
 /// The original's starting state bits, 528: chat level 2.
 const DEFAULT_CHAT_LEVEL: u8 = 2;
 
@@ -297,7 +339,7 @@ fn first_time(seen: &Mutex<std::collections::HashSet<u32>>, id: u32) -> bool {
 fn doll_nbt(doll: &Doll) -> Compound {
     let max_health: Compound = [
         ("id".into(), Tag::String("minecraft:max_health".into())),
-        ("base".into(), Tag::Double(f64::from(HEALTH).to_bits())),
+        ("base".into(), Tag::Double(f64::from(health_of(doll)).to_bits())),
     ]
     .into();
     [
@@ -306,7 +348,7 @@ fn doll_nbt(doll: &Doll) -> Compound {
         ("PersistenceRequired".into(), Tag::Byte(1)),
         // A doll lays no eggs: about three years of play until the first.
         ("EggLayTime".into(), Tag::Int(i32::MAX)),
-        ("Health".into(), Tag::Float(HEALTH.to_bits())),
+        ("Health".into(), Tag::Float(health_of(doll).to_bits())),
         ("attributes".into(), Tag::List(vec![Tag::Compound(max_health)])),
     ]
     .into()
@@ -321,20 +363,30 @@ fn same_kind(a: &ItemStack, b: &ItemStack) -> bool {
     a.item == b.item && a.damage == b.damage && a.extra == b.extra
 }
 
-/// Puts `stack` into `items` whole, onto matching stacks first, then into empty slots. False, and
-/// nothing changed, when it does not all fit.
-fn store(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> bool {
-    let mut room = 0;
-    for slot in items.iter() {
-        room += match slot {
+/// How many of `stack` would fit into `items`.
+fn room_for(items: &[Option<ItemStack>], stack: &ItemStack, max: u32) -> u32 {
+    items
+        .iter()
+        .map(|slot| match slot {
             None => max,
             Some(s) if same_kind(s, stack) => max.saturating_sub(s.count),
             Some(_) => 0,
-        };
-    }
-    if room < stack.count {
+        })
+        .sum()
+}
+
+/// Puts `stack` into `items` whole, onto matching stacks first, then into empty slots. False, and
+/// nothing changed, when it does not all fit.
+fn store(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> bool {
+    if room_for(items, stack, max) < stack.count {
         return false;
     }
+    store_some(items, stack, max);
+    true
+}
+
+/// Puts as much of `stack` into `items` as fits: how many are left over.
+fn store_some(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> u32 {
     let mut left = stack.count;
     for slot in items.iter_mut().filter(|s| s.is_some()) {
         if let Some(s) = slot
@@ -356,13 +408,13 @@ fn store(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> bool {
             *slot = Some(s);
         }
     }
-    true
+    left
 }
 
-/// `native_menu_inventory_slot`: the player's inventory slot a click below the doll's row landed
-/// on (the three rows of the inventory, then the hotbar).
-fn inventory_slot(slot: i32) -> Option<usize> {
-    let below = usize::try_from(slot).ok()?.checked_sub(INVENTORY)?;
+/// `native_menu_inventory_slot`: the player's inventory slot a click below the doll's `size` slots
+/// landed on (the three rows of the inventory, then the hotbar).
+fn inventory_slot(size: usize, slot: i32) -> Option<usize> {
+    let below = usize::try_from(slot).ok()?.checked_sub(size)?;
     match below {
         0..27 => Some(below + 9),
         27..36 => Some(below - 27),
@@ -371,16 +423,120 @@ fn inventory_slot(slot: i32) -> Option<usize> {
 }
 
 impl Mod {
+    /// A server's player gets a server menu; the player of a single-player world (whom server menus
+    /// do not reach) gets the chest screen, which the game hooks fill from and save back to the doll.
     fn open_inventory(&self, host: &mut dyn Host, player: u128, id: u32, data: &DollData) {
         let name = doll_of(host, id).map_or("Doll", |d| d.name);
-        let window = host.open_menu(player, 1, Text::literal(name), data.items.clone());
+        let rows = (data.items.len() / 9).clamp(1, 6);
+        let window = host.open_menu(player, rows as _, Text::literal(name), data.items.clone());
         debug(host, &format!("inventory {id}: open_menu -> {window:?}"));
-        if let Some(window) = window
-            && let Ok(mut open) = OPEN.lock()
-        {
-            open.insert(player, (id, window));
+        match window {
+            Some(window) => {
+                if let Ok(mut open) = OPEN.lock() {
+                    open.insert(player, (id, window));
+                }
+            }
+            None => {
+                let items = goals::inventory(id).unwrap_or_else(|| data.items.clone());
+                goals::request_chest(id, name.to_owned(), items);
+                debug(host, &format!("inventory {id}: opening the chest screen ({rows} rows)"));
+            }
         }
     }
+
+    /// What a doll's inventory holds now, from the chest screen or its own goals: saved with it.
+    fn store_items(&self, host: &mut dyn Host, id: u32, items: Vec<Option<ItemStack>>, from_chest: bool) {
+        let holder = Holder::Entity(id);
+        if !DOLL.has(host, holder).unwrap_or(false) {
+            debug(host, &format!("inventory {id}: changed, but the doll is gone"));
+            return;
+        }
+        let mut data = DOLL.get(host, holder).unwrap_or_default();
+        data.items = items;
+        if from_chest {
+            debug(host, &format!("inventory {id}: chest closed, {} stacks", data.items.iter().flatten().count()));
+            goals::put_inventory(id, data.items.clone());
+        }
+        if let Some(doll) = doll_of(host, id) {
+            remember(id, doll, &data);
+        }
+        let _ = DOLL.set(host, holder, data);
+    }
+}
+
+/// `canCollectRange`: Russia takes an item within two blocks.
+const COLLECT_RANGE_SQR: f64 = 4.0;
+
+/// How many of its own ticks pass between Russia's looks for dropped items.
+static COLLECT_TICKS: LazyLock<Mutex<HashMap<u32, u32>>> = LazyLock::new(Default::default);
+
+/// `EntityDollAICollectItem`, the part a mob's goals cannot do: finds the nearest dropped item Russia
+/// has room for, for its goal to walk to, and takes whatever is within reach into its inventory.
+fn collect(host: &mut dyn Host, id: u32) {
+    let due = COLLECT_TICKS.lock().is_ok_and(|mut ticks| {
+        let n = ticks.entry(id).or_default();
+        *n = (*n + 1) % 5;
+        *n == 0
+    });
+    if !due {
+        return;
+    }
+    let Some(entity) = host.entity(id) else { return };
+    let (Some(at), Some(level)) = (host.entity_position(entity), host.entity_level(entity)) else {
+        return;
+    };
+    let dimension = level.dimension();
+    let found = host.item_entities(
+        dimension,
+        [at[0] - 16.0, at[1] - 8.0, at[2] - 16.0],
+        [at[0] + 16.0, at[1] + 8.0, at[2] + 16.0],
+    );
+    let holder = Holder::Entity(id);
+    let mut data = DOLL.get(host, holder).unwrap_or_default();
+    // While its owner has it open, what Russia carries is the chest screen's.
+    let can_take = goals::chest_open() != Some(id);
+    let mut taken = Vec::new();
+    let mut nearest: Option<(f64, [f64; 3])> = None;
+    for item in found {
+        if item.stack.count == 0 || goals::is_doll_item(&item.stack.item) {
+            continue;
+        }
+        let max = host.max_stack_size(&item.stack.item).unwrap_or(64);
+        if room_for(&data.items, &item.stack, max) == 0 {
+            continue;
+        }
+        let d = item.position;
+        let d2 = (d[0] - at[0]).powi(2) + (d[1] - at[1]).powi(2) + (d[2] - at[2]).powi(2);
+        if can_take && d2 <= COLLECT_RANGE_SQR && item.pickup_delay == 0 {
+            let mut items = data.items.clone();
+            let left = store_some(&mut items, &item.stack, max);
+            let mut rest = item.stack.clone();
+            rest.count = left;
+            // Only once the item on the ground is changed does Russia have it: nothing is copied.
+            if host.set_item_entity(dimension, item.id, rest) {
+                taken.push((item.stack.item.to_string(), item.stack.count - left));
+                data.items = items;
+            }
+            continue;
+        }
+        if nearest.is_none_or(|(n, _)| d2 < n) {
+            nearest = Some((d2, d));
+        }
+    }
+    goals::set_item_target(id, nearest.map(|(_, d)| d));
+    if taken.is_empty() {
+        return;
+    }
+    host.play_local_sound("minecraft:entity.item.pickup", at, 0.2, 2.0, 0);
+    for (item, count) in &taken {
+        let short = item.strip_prefix("minecraft:").unwrap_or(item);
+        say(host, id, &data, 3, &format!("{short} x{count}"));
+    }
+    goals::put_inventory(id, data.items.clone());
+    if let Some(doll) = doll_of(host, id) {
+        remember(id, doll, &data);
+    }
+    let _ = DOLL.set(host, holder, data);
 }
 
 impl Hooks for Mod {
@@ -469,7 +625,8 @@ impl Hooks for Mod {
             if let Some(doll) = doll_of(host, id) {
                 forget(id);
                 host.remove_mob(&player.dimension, id);
-                let k = Known { doll, owner: player.uuid, items: data.items };
+                let items = goals::inventory(id).unwrap_or(data.items);
+                let k = Known { doll, owner: player.uuid, items };
                 give_to_owner(host, player.uuid, belongings(&k));
             }
             return Flow::Cancel;
@@ -524,14 +681,15 @@ impl Hooks for Mod {
         if data.owner != event.uuid {
             return;
         }
+        let size = data.items.len();
         if let Ok(slot) = usize::try_from(event.slot)
-            && slot < INVENTORY
+            && slot < size
         {
             // Out of the doll, into the player's inventory; what does not fit stays.
             if let Some(stack) = data.items[slot].take() {
                 data.items[slot] = host.give_stack(event.uuid, stack);
             }
-        } else if let Some(inv) = inventory_slot(event.slot) {
+        } else if let Some(inv) = inventory_slot(size, event.slot) {
             // Into the doll: only a whole stack, and only once the doll has made room for it.
             let Some(stack) = host.player_stacks(event.uuid).and_then(|s| s.get(inv).cloned().flatten())
             else {
@@ -556,6 +714,7 @@ impl Hooks for Mod {
             return;
         }
         host.set_menu_items(event.uuid, data.items.clone());
+        goals::put_inventory(id, data.items.clone());
         if let Some(doll) = doll_of(host, id) {
             remember(id, doll, &data);
         }
@@ -586,7 +745,8 @@ impl Hooks for Mod {
         let data = DOLL.get(host, Holder::Entity(id)).unwrap_or_default();
         forget(id);
         host.remove_mob(&player.dimension, id);
-        let k = Known { doll, owner: player.uuid, items: data.items };
+        let items = goals::inventory(id).unwrap_or(data.items);
+        let k = Known { doll, owner: player.uuid, items };
         give_to_owner(host, player.uuid, belongings(&k));
         Flow::Cancel
     }
@@ -607,6 +767,13 @@ impl Hooks for Mod {
                 give_to_owner(host, k.owner, belongings(&k));
             }
         }
+        // What the chest screen left in a doll, and what the dolls' own jobs changed.
+        for (from, items) in goals::take_chest_closed() {
+            self.store_items(host, from, items, true);
+        }
+        for (from, items) in goals::take_inventory_changes() {
+            self.store_items(host, from, items, false);
+        }
         if event.kind != KIND {
             return;
         }
@@ -615,7 +782,7 @@ impl Hooks for Mod {
         if !DOLL.has(host, holder).unwrap_or(false) {
             return;
         }
-        let data = DOLL.get(host, holder).unwrap_or_default();
+        let mut data = DOLL.get(host, holder).unwrap_or_default();
         if known(id).is_none_or(|k| k.owner != data.owner) {
             let Some(doll) = doll_of(host, id) else {
                 if first_time(&TICK_SEEN, id) {
@@ -627,13 +794,29 @@ impl Hooks for Mod {
             if first_time(&TICK_SEEN, id) {
                 debug(host, &format!("tick {id} {:?}: mode {} owner set {}", doll.name, data.mode, data.owner != 0));
             }
+            // A doll saved before its inventory grew gets the rest of its slots.
+            if data.items.len() < doll.slots {
+                data.items.resize(doll.slots, None);
+                let _ = DOLL.set(host, holder, data.clone());
+            }
+            goals::put_inventory(id, data.items.clone());
             remember(id, doll, &data);
             // The first version stood by with NoAI, which would stop the goals now.
             if let Some(entity) = host.entity(id) {
                 host.entity_merge_nbt(entity, [("NoAI".into(), Tag::Byte(0))].into());
             }
         }
+        if goals::inventory(id).is_none() {
+            goals::put_inventory(id, data.items.clone());
+        }
         tell_state(id, &data);
+        if known(id).is_some_and(|k| k.doll.name == goals::RUSSIA) {
+            if data.enabled && (data.mode == goals::PATROL || data.mode == goals::FOLLOW) {
+                collect(host, id);
+            } else {
+                goals::set_item_target(id, None);
+            }
+        }
     }
 
     /// A dead doll leaves itself and what it carried, not feathers and raw chicken, and they go
@@ -662,7 +845,10 @@ impl Hooks for Mod {
             return Flow::Continue;
         };
         // Without its texture a doll would be invisible: then it shows as the chicken it is.
-        let drawn = model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held);
+        let drawn = match doll.look {
+            model::Look::Base => model::draw_doll(host, event.mob, event.draw, doll.sprite, doll.held),
+            model::Look::Boxes(m) => model::draw_model(host, event.mob, event.draw, doll.sprite, doll.held, m),
+        };
         if first_time(&RENDER_SEEN, event.mob.id) {
             debug(host, &format!("render {} {:?}: drawn={drawn}", event.mob.id, doll.name));
             if !drawn {
@@ -739,12 +925,38 @@ mod tests {
 
     #[test]
     fn clicks_below_the_row_land_on_the_inventory_then_the_hotbar() {
-        assert_eq!(inventory_slot(3), None);
-        assert_eq!(inventory_slot(9), Some(9));
-        assert_eq!(inventory_slot(35), Some(35));
-        assert_eq!(inventory_slot(36), Some(0));
-        assert_eq!(inventory_slot(44), Some(8));
-        assert_eq!(inventory_slot(45), None);
+        assert_eq!(inventory_slot(9, 3), None);
+        assert_eq!(inventory_slot(9, 9), Some(9));
+        assert_eq!(inventory_slot(9, 35), Some(35));
+        assert_eq!(inventory_slot(9, 36), Some(0));
+        assert_eq!(inventory_slot(9, 44), Some(8));
+        assert_eq!(inventory_slot(9, 45), None);
+        // Russia's four rows: the inventory starts after its 36 slots.
+        assert_eq!(inventory_slot(36, 35), None);
+        assert_eq!(inventory_slot(36, 36), Some(9));
+        assert_eq!(inventory_slot(36, 63), Some(0));
+    }
+
+    #[test]
+    fn what_does_not_fit_is_left_over() {
+        let mut items = vec![Some(ItemStack::new("minecraft:torch", 60)), None];
+        assert_eq!(room_for(&items, &ItemStack::new("minecraft:torch", 1), 64), 68);
+        let left = store_some(&mut items, &ItemStack::new("minecraft:torch", 80), 64);
+        assert_eq!(left, 12);
+        assert_eq!(items[1].as_ref().map(|s| s.count), Some(64));
+    }
+
+    #[test]
+    fn every_doll_has_its_own_name_and_item_and_whole_rows() {
+        for (i, a) in DOLLS.iter().enumerate() {
+            assert!(a.slots % 9 == 0 && a.slots <= 54, "{}", a.name);
+            for b in &DOLLS[i + 1..] {
+                assert_ne!(a.name, b.name);
+                assert_ne!(a.item, b.item);
+            }
+        }
+        assert_eq!(health_of(doll_named(goals::GOLIATH).unwrap()), 60.0);
+        assert_eq!(health_of(doll_named(goals::REIMU).unwrap()), 30.0);
     }
 
     #[test]

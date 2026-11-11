@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": [
+    "AW ",
+    "WHW",
+    " W "
+  ],
+  "key": {
+    "A": "minecraft:diamond_sword",
+    "W": "minecraft:iron_block",
+    "H": "alice_dolls:doll_core"
+  },
+  "result": {
+    "id": "alice_dolls:goliath_doll"
+  }
+}
