@@ -158,19 +158,6 @@ fn say(id: u32, level: u8, text: impl Into<String>) {
     }
 }
 
-/// Dolls used up since the last call (an Ooedo that exploded), whose items go back to their owners.
-static SPENT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-
-pub fn take_spent() -> Vec<u32> {
-    SPENT.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default()
-}
-
-fn spend(id: u32) {
-    if let Ok(mut spent) = SPENT.lock() {
-        spent.push(id);
-    }
-}
-
 // ---- Inventories, shared with the api crate ----
 
 use crate::items::ItemStack;
@@ -391,6 +378,9 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
     if kind == Kind::Wakasagi && m.fluids.in_water && state.mode != RIDE {
         swim(m);
     }
+    if kind == Kind::Goliath {
+        wear_armour(m);
+    }
     m.no_gravity = state.mode == RIDE;
     if state.mode == RIDE && state.enabled {
         sit_on_head(m, w);
@@ -465,6 +455,58 @@ fn swim(m: &mut Mob) {
     let (dx, dz) = (-yaw.sin(), yaw.cos());
     m.velocity.x = m.velocity.x * 0.4 + dx * SWIM_SPEED * 0.6;
     m.velocity.z = m.velocity.z * 0.4 + dz * SWIM_SPEED * 0.6;
+}
+
+/// How many of Goliath's slots, the first, hold what it wears.
+pub const ARMOUR_SLOTS: usize = 4;
+
+/// Where an armour piece is worn: 0 the head, 1 the chest, 2 the legs, 3 the feet.
+fn armour_part(item: &str) -> Option<usize> {
+    let path = item.rsplit(':').next()?;
+    if path.ends_with("_helmet") || path.ends_with("_head") || path.ends_with("_skull") || path == "carved_pumpkin" {
+        Some(0)
+    } else if path.ends_with("_chestplate") || path == "elytra" {
+        Some(1)
+    } else if path.ends_with("_leggings") {
+        Some(2)
+    } else if path.ends_with("_boots") {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+/// Goliath wears the armour in the first `ARMOUR_SLOTS` slots of its inventory, each piece where it
+/// goes, whichever of them it is in: its armour then counts against every blow, as a player's does.
+/// What it wears stays in its inventory, so it never drops as the mob's equipment.
+fn wear_armour(m: &mut Mob) {
+    use super::finalize::{self, CHEST, FEET, HEAD, LEGS};
+    let mut want: [Option<ItemStack>; 4] = Default::default();
+    for s in inventory(m.id).unwrap_or_default().into_iter().take(ARMOUR_SLOTS).flatten() {
+        if let Some(part) = armour_part(&s.item)
+            && want[part].is_none()
+        {
+            want[part] = Some(s);
+        }
+    }
+    for (part, slot) in [HEAD, CHEST, LEGS, FEET].into_iter().enumerate() {
+        let worn = match slot {
+            HEAD => &mut m.extra.head,
+            CHEST => &mut m.extra.chest,
+            LEGS => &mut m.extra.legs,
+            _ => &mut m.extra.feet,
+        };
+        if worn.as_deref() == want[part].as_ref().map(|s| &*s.item) {
+            continue;
+        }
+        match want[part].take() {
+            Some(stack) => {
+                finalize::set_item_stack(m, slot, stack);
+                finalize::set_drop_chance(m, slot, 0.0);
+            }
+            None => *worn = None,
+        }
+    }
 }
 
 fn patrolling(m: &Mob, _: &MobWorld) -> bool {
@@ -1232,14 +1274,19 @@ const EXPLODE_STRENGTH: f32 = 3.0;
 /// Ticks of fuse once close, as a creeper's.
 const FUSE: i32 = 30;
 
-/// On patrol, walks up to the nearest hostile mob, fuses for a second and a half, and explodes,
-/// its item going back to its owner.
+/// Ticks Ooedo rests after a blast before it looks for the next mob.
+const BLAST_REST: i64 = 100;
+
+/// On patrol, walks up to the nearest hostile mob, fuses for a second and a half, and explodes.
+/// Unlike the original's, it lives through it: no blast hurts it (the api crate's
+/// `living_incoming_damage`), and it rests for five seconds before the next.
 #[derive(Clone, Debug, Default)]
 struct Explode {
     target: Option<u32>,
     fuse: i32,
     last_scan: i64,
     last_path: i64,
+    rest_until: i64,
 }
 
 impl Goal for Explode {
@@ -1247,7 +1294,7 @@ impl Goal for Explode {
         goals::MOVE | goals::LOOK
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !in_mode(m, PATROL) || cx.w.game_time - self.last_scan < 20 {
+        if !in_mode(m, PATROL) || cx.w.game_time - self.last_scan < 20 || cx.w.game_time < self.rest_until {
             return false;
         }
         self.last_scan = cx.w.game_time;
@@ -1291,8 +1338,9 @@ impl Goal for Explode {
         }
         if self.fuse >= FUSE {
             cx.events.push(MobEvent::Explode(me, EXPLODE_STRENGTH, Species::Chicken));
-            spend(m.id);
-            m.removed = true;
+            self.fuse = 0;
+            self.target = None;
+            self.rest_until = cx.w.game_time + BLAST_REST;
         }
     }
     fn box_clone(&self) -> Box<dyn Goal> {

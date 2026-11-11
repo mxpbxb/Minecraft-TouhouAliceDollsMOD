@@ -3,10 +3,10 @@
 # register_goals hook, so its goals are swapped in through the injection below.
 [mod]
 id = "alice_dolls"
-version = "0.4.0"
+version = "0.5.0"
 
 [compatibility]
-horizon_revision = "028375d5fa3a1ad3fcd7d962524470d22d1034f1"
+horizon_revision = "1fe4e6fe0252c44efd41d882daee0468389f7d5f"
 
 [api]
 path = "api"

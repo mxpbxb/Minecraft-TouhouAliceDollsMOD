@@ -16,7 +16,7 @@ The original Java source is in the version folders of this repository. This fold
 | Shanghai | golden sword | 9 | Fights hostile mobs within 5 blocks (from your head too), shears sheep and steals from animals, reports the mobs around it |
 | Horai | golden pickaxe | 9 | Reports the ore within 3 blocks and digs its way to it, even from your head |
 | Diamond Horai | diamond pickaxe | 9 | The same as Horai for now |
-| Ooedo | TNT | 9 | On patrol, walks up to the nearest hostile mob and explodes |
+| Ooedo | TNT | 9 | On patrol, walks up to the nearest hostile mob and explodes, then rests five seconds; no explosion hurts it |
 | Germany | golden axe | 9 | Finds a tree within 5 blocks, hops to its top and chops it down |
 | London | eye of ender | 9 | Reports the spawners in the 64 layers above and below it |
 | Russia | chest | 36 | On patrol or following, picks up dropped items within 16 blocks; with torches in its first slot, puts them down where it is dark |
@@ -25,15 +25,20 @@ The original Java source is in the version folders of this repository. This fold
 | Reimu | paper | 18 | In any mode but Rideon, shoots a ring of eight homing amulets every four seconds |
 | Aya | feather | 18 | Takes a photo every 30 seconds, and when hurt, and tells you what she caught |
 | Wakasagi | tropical fish | 18 | Keeps you company (a secret doll in the original) |
-| Goliath | diamond sword, iron blocks | 9 | Nearly three blocks tall, 60 health: on patrol fights hostile mobs, following fights whatever is after you, and knocks them back |
+| Goliath | diamond sword, iron blocks | 18 | Nearly three blocks tall, 60 health: on patrol fights hostile mobs, following fights whatever is after you, and knocks them back. Wears the armour in its first four slots |
 | Yuuka | sunflower | 18 | On patrol, tills dirt between farmland, plants seeds from her inventory, and harvests ripe crops, melons and pumpkins, replanting them |
 
 Each recipe is the item in the top left, wool (Goliath: iron blocks), and a Doll Core in the middle.
 Right-click a doll empty-handed to switch modes: Standby, Patrol, Follow, Rideon. Right-click with a
 Doll Core to turn its AI on or off, with a book to change how much it says, or with a chest to open its
-inventory. Sneak and right-click it empty-handed, or hit it with a Doll Core, to pick it up. Every doll
-has 30 health, half as much again as a player (Goliath 60). A doll's item can't be burnt, blown up or
-despawned, and a dead doll's item and inventory go to its owner.
+inventory. Sneak and right-click it empty-handed, or hit it with a Doll Core, to pick it up. Like a
+shulker box, the doll's item keeps its inventory (its tooltip lists the first five stacks), and the
+doll has it again when placed. Every doll has 30 health, half as much again as a player (Goliath 60).
+A doll's item can't be burnt, blown up or despawned, and a dead doll's item, with its inventory, goes
+to its owner.
+
+Goliath wears any helmet, chestplate, leggings and boots put in its first four slots, in any order,
+and its armour counts against every blow. It isn't drawn on the model yet.
 
 Marisa's and Reimu's shots home in on the mob they were fired at and hit nothing else, so they never
 hurt you, your other dolls, or anything in the way. The extras held thKaguya mod items; Aya's fan,
@@ -58,6 +63,6 @@ direction and spawner mob names, and Aya's real screenshots.
 
 Built and installed by the Horizon launcher (`native-build`) from the two mod files. The launcher
 always builds the newest Horizon main; this was last checked against
-`f5087c6b6577d6441180b42ad4e47ad1e9b06c18`.
+`1fe4e6fe0252c44efd41d882daee0468389f7d5f`.
 
 The original mod has no licence. Do not redistribute this port without the author's permission.

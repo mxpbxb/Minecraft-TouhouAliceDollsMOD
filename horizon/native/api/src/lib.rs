@@ -23,7 +23,8 @@ use horizon_client::mobs::alice_doll_goals as goals;
 use horizon_client::mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, AttackEntityEvent, Compound,
     EntityTickListenedEvent, EntityTickPostEvent, Flow, Holder, Hooks, Host, InteractEntityEvent,
-    ItemStack, LootDropsEvent, MenuClosedEvent, MenuInputClosedEvent, MobSubmitEvent, Tag, Text,
+    ItemStack, LivingIncomingDamageEvent, LootDropsEvent, MenuClosedEvent, MenuInputClosedEvent,
+    MobSubmitEvent, NativeInventoryKind, NativeServerPlayer, StackData, Tag, Text, TooltipEvent,
     UseItemOnEvent,
 };
 
@@ -105,7 +106,8 @@ static DOLLS: [Doll; 14] = [
         item: "alice_dolls:goliath_doll",
         sprite: "alice_dolls:entity/goliath",
         held: "minecraft:diamond_sword",
-        slots: INVENTORY,
+        // The first four are what it wears (`goals::wear_armour`), the rest a row and a half.
+        slots: 18,
         look: model::Look::Boxes(&model::GOLIATH),
     },
     Doll {
@@ -307,12 +309,74 @@ fn give_to_owner(host: &mut dyn Host, owner: u128, stacks: Vec<ItemStack>) -> Ve
     stacks.into_iter().filter_map(|stack| host.give_stack(owner, stack)).collect()
 }
 
-/// A gone doll's item and everything it carried, for its owner.
+/// A gone doll's item, for its owner: it carries the doll's inventory as a shulker box does.
 fn belongings(k: &Known) -> Vec<ItemStack> {
-    let mut all = vec![ItemStack::new(k.doll.item, 1)];
-    all.extend(k.items.iter().flatten().cloned());
-    all
+    vec![doll_item(k.doll, &k.items)]
 }
+
+/// `doll`'s item with `items` inside it, slot by slot (`minecraft:container`, a shulker box's).
+fn doll_item(doll: &Doll, items: &[Option<ItemStack>]) -> ItemStack {
+    let mut stack = ItemStack::new(doll.item, 1);
+    let container: Vec<(u8, ItemStack)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| Some((u8::try_from(i).ok()?, s.clone()?)))
+        .collect();
+    if !container.is_empty() {
+        stack.extra = Some(Box::new(StackData { container, ..StackData::default() }));
+    }
+    stack
+}
+
+/// What a doll item carries, as `slots` slots: a stack in a slot past them takes the first empty one,
+/// and is lost only when none is.
+fn items_in(stack: &ItemStack, slots: usize) -> Vec<Option<ItemStack>> {
+    let mut items = vec![None; slots];
+    let mut over = Vec::new();
+    for (i, s) in stack.container() {
+        match items.get_mut(usize::from(*i)) {
+            Some(slot @ None) => *slot = Some(s.clone()),
+            _ => over.push(s.clone()),
+        }
+    }
+    for s in over {
+        if let Some(slot) = items.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(s);
+        }
+    }
+    items
+}
+
+/// Takes the one doll item `stack` the player placed from their hand: a plain one as any item, one
+/// carrying an inventory from the very slot, since it stacks with nothing else. Whether it was taken.
+fn take_placed(host: &mut dyn Host, player: &NativeServerPlayer, stack: &ItemStack) -> bool {
+    if stack.extra.is_none() {
+        return host.take_items(&stack.item, 1) == 1;
+    }
+    let mut rest = stack.clone();
+    rest.count -= 1;
+    let rest = (rest.count > 0).then_some(rest);
+    // The main hand, then the off hand (slot 40).
+    [usize::from(player.selected_slot), 40].into_iter().any(|slot| {
+        host.set_inventory_slot(player.uuid, NativeInventoryKind::Player, slot, Some(stack), rest.clone()).is_ok()
+    })
+}
+
+/// `minecraft:iron_ingot` as "Iron Ingot", for a doll item's tooltip.
+fn item_label(item: &str) -> String {
+    let path = item.rsplit(':').next().unwrap_or(item);
+    path.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// How many of a doll item's stacks its tooltip lists, as a shulker box's lists five.
+const TOOLTIP_STACKS: usize = 5;
 
 /// A line in `alice_dolls-debug.log` in the game folder: what happened when a doll item was used,
 /// to find out why some will not place.
@@ -549,20 +613,32 @@ impl Hooks for Mod {
             f64::from(event.pos[1] + event.face[1]),
             f64::from(event.pos[2] + event.face[2]) + 0.5,
         ];
+        // What it carried when it was picked up comes back with it. The item goes first, so a doll
+        // and its inventory are never in two places.
+        let items = items_in(event.stack, doll.slots);
+        let survival = player.game_mode != 1;
+        if survival && !take_placed(host, &player, event.stack) {
+            debug(host, &format!("  {item}: could not take it from the player's hand"));
+            return Flow::Cancel;
+        }
         let summoned = host.summon(&player.dimension, KIND, at, doll_nbt(doll));
         debug(host, &format!("  {item}: summon in {} at {at:?} -> {summoned:?}", player.dimension));
         let Some(id) = summoned else {
+            if survival {
+                // Back where it came from, which it has just left room in.
+                let mut back = event.stack.clone();
+                back.count = 1;
+                give_to_owner(host, player.uuid, vec![back]);
+            }
             let text = format!("{} : there is no room here", doll.name);
             host.action_bar(player.uuid, Text::literal(text));
             return Flow::Cancel;
         };
-        let data = DollData { owner: player.uuid, ..DollData::default() };
+        let data = DollData { owner: player.uuid, items, ..DollData::default() };
         remember(id, doll, &data);
         tell_state(id, &data);
+        goals::put_inventory(id, data.items.clone());
         let _ = DOLL.set(host, Holder::Entity(id), data);
-        if player.game_mode != 1 {
-            host.take_items(doll.item, 1);
-        }
         let text = format!("{} : Activation successful!", doll.name);
         host.action_bar(player.uuid, Text::literal(text));
         Flow::Cancel
@@ -715,12 +791,6 @@ impl Hooks for Mod {
             let data = DOLL.get(host, Holder::Entity(from)).unwrap_or_default();
             say(host, from, &data, level, &text);
         }
-        // An Ooedo that blew itself up: it and what it carried go back to its owner.
-        for from in goals::take_spent() {
-            if let Some(k) = forget(from) {
-                give_to_owner(host, k.owner, belongings(&k));
-            }
-        }
         let pending: Vec<(u128, u32)> = PENDING.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
         for (player, doll) in pending {
             self.open_inventory(host, player, doll);
@@ -787,6 +857,31 @@ impl Hooks for Mod {
             event.drops.clear();
             let left = give_to_owner(host, k.owner, belongings(&k));
             event.drops.extend(left);
+        }
+    }
+
+    /// Ooedo walks away from its own blasts, and from everyone else's.
+    fn living_incoming_damage(&self, event: &mut LivingIncomingDamageEvent<'_>) -> Flow {
+        if event.kind != KIND || !event.damage_type.ends_with("explosion") {
+            return Flow::Continue;
+        }
+        let ooedo = u32::try_from(event.entity).ok().and_then(known).is_some_and(|k| k.doll.name == goals::OOEDO);
+        if ooedo { Flow::Cancel } else { Flow::Continue }
+    }
+
+    /// A doll item that carries an inventory lists it, as a shulker box does.
+    fn tooltip(&self, _: &dyn Host, event: &mut TooltipEvent<'_>) {
+        if doll_for_item(&event.stack.item).is_none() {
+            return;
+        }
+        let held = event.stack.container();
+        for (_, s) in held.iter().take(TOOLTIP_STACKS) {
+            let line = format!("§7{} x{}", item_label(&s.item), s.count);
+            event.lines.push((Text::legacy(&line), u32::MAX));
+        }
+        if held.len() > TOOLTIP_STACKS {
+            let line = format!("§7§oand {} more...", held.len() - TOOLTIP_STACKS);
+            event.lines.push((Text::legacy(&line), u32::MAX));
         }
     }
 
@@ -866,6 +961,29 @@ mod tests {
         assert!(following.enabled);
         assert_eq!(following.chat_level, DEFAULT_CHAT_LEVEL);
         assert_eq!(following.items, vec![None; INVENTORY]);
+    }
+
+    #[test]
+    fn a_picked_up_doll_keeps_its_inventory_in_its_item() {
+        let russia = doll_named(goals::RUSSIA).unwrap();
+        let mut items = vec![None; russia.slots];
+        items[0] = Some(ItemStack::new("minecraft:torch", 12));
+        items[35] = Some(ItemStack::new("minecraft:iron_ingot", 3));
+        let stack = doll_item(russia, &items);
+        assert_eq!(stack.item.as_ref(), russia.item);
+        assert_eq!(stack.container().len(), 2);
+        assert_eq!(items_in(&stack, russia.slots), items);
+        // An empty doll's item is a plain one, which stacks.
+        assert!(doll_item(russia, &vec![None; russia.slots]).extra.is_none());
+        // Into fewer slots, what is past them takes the empty ones.
+        let fewer = items_in(&stack, 9);
+        assert_eq!(fewer.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn a_tooltip_names_items_as_the_game_does() {
+        assert_eq!(item_label("minecraft:iron_ingot"), "Iron Ingot");
+        assert_eq!(item_label("torch"), "Torch");
     }
 
     #[test]
