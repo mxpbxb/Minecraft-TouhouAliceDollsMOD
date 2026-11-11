@@ -6,7 +6,7 @@ id = "alice_dolls"
 version = "0.4.0"
 
 [compatibility]
-horizon_revision = "f5087c6b6577d6441180b42ad4e47ad1e9b06c18"
+horizon_revision = "028375d5fa3a1ad3fcd7d962524470d22d1034f1"
 
 [api]
 path = "api"
@@ -71,30 +71,3 @@ cancellable = true
 target = "horizon_client::game::entity::<ItemEntity as Entity>::ignores_explosion"
 helper = "doll_item_blast.rs"
 bindings = [{ name = "item", ty = "&horizon_client::entities::ItemEntity", value = "&*self" }]
-
-# A doll's inventory opens in the chest screen. A single player has no server menus, so the game shows it
-# as it shows a chest minecart's: opened on the next tick, shown as a chest, and copied back on closing.
-[[injection]]
-id = "doll-chest-open"
-kind = "HEAD"
-target = "horizon_client::game::storage::Game<'_>::tick_container_reach"
-helper = "doll_chest_open.rs"
-bindings = [{ name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" }]
-
-[[injection]]
-id = "doll-chest-kind"
-kind = "HEAD"
-cancellable = true
-target = "horizon_client::game::minecarts::Game<'_>::open_cart_kind"
-helper = "doll_chest_kind.rs"
-bindings = [{ name = "game", ty = "&crate::game::Game<'_>", value = "&*self" }]
-
-[[injection]]
-id = "doll-chest-store"
-kind = "HEAD"
-target = "horizon_client::game::minecarts::Game<'_>::store_cart_items"
-helper = "doll_chest_store.rs"
-bindings = [
-  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
-  { name = "key", ty = "(i32, i32, i32)", value = "key" },
-]

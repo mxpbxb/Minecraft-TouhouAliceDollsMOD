@@ -23,7 +23,7 @@ use horizon_client::mobs::alice_doll_goals as goals;
 use horizon_client::mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, AttackEntityEvent, Compound,
     EntityTickListenedEvent, EntityTickPostEvent, Flow, Holder, Hooks, Host, InteractEntityEvent,
-    ItemStack, LootDropsEvent, MenuClickedEvent, MenuClosedEvent, MobSubmitEvent, Tag, Text,
+    ItemStack, LootDropsEvent, MenuClosedEvent, MenuInputClosedEvent, MobSubmitEvent, Tag, Text,
     UseItemOnEvent,
 };
 
@@ -375,16 +375,6 @@ fn room_for(items: &[Option<ItemStack>], stack: &ItemStack, max: u32) -> u32 {
         .sum()
 }
 
-/// Puts `stack` into `items` whole, onto matching stacks first, then into empty slots. False, and
-/// nothing changed, when it does not all fit.
-fn store(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> bool {
-    if room_for(items, stack, max) < stack.count {
-        return false;
-    }
-    store_some(items, stack, max);
-    true
-}
-
 /// Puts as much of `stack` into `items` as fits: how many are left over.
 fn store_some(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> u32 {
     let mut left = stack.count;
@@ -411,37 +401,38 @@ fn store_some(items: &mut [Option<ItemStack>], stack: &ItemStack, max: u32) -> u
     left
 }
 
-/// `native_menu_inventory_slot`: the player's inventory slot a click below the doll's `size` slots
-/// landed on (the three rows of the inventory, then the hotbar).
-fn inventory_slot(size: usize, slot: i32) -> Option<usize> {
-    let below = usize::try_from(slot).ok()?.checked_sub(size)?;
-    match below {
-        0..27 => Some(below + 9),
-        27..36 => Some(below - 27),
-        _ => None,
-    }
-}
+/// Inventories asked for with a chest, to open on the next tick: a menu can't be opened while the
+/// server is in the middle of the player's own click (single player is an integrated server too).
+static PENDING: Mutex<Vec<(u128, u32)>> = Mutex::new(Vec::new());
 
 impl Mod {
-    /// A server's player gets a server menu; the player of a single-player world (whom server menus
-    /// do not reach) gets the chest screen, which the game hooks fill from and save back to the doll.
-    fn open_inventory(&self, host: &mut dyn Host, player: u128, id: u32, data: &DollData) {
-        let name = doll_of(host, id).map_or("Doll", |d| d.name);
-        let rows = (data.items.len() / 9).clamp(1, 6);
-        let window = host.open_menu(player, rows as _, Text::literal(name), data.items.clone());
-        debug(host, &format!("inventory {id}: open_menu -> {window:?}"));
-        match window {
-            Some(window) => {
-                if let Ok(mut open) = OPEN.lock() {
-                    open.insert(player, (id, window));
-                }
-            }
-            None => {
-                let items = goals::inventory(id).unwrap_or_else(|| data.items.clone());
-                goals::request_chest(id, name.to_owned(), items);
-                debug(host, &format!("inventory {id}: opening the chest screen ({rows} rows)"));
-            }
+    /// Opens doll `id`'s inventory for `player` as a chest: they put items in and take them out as
+    /// in any chest, and what is left in it when it closes is the doll's (`menu_input_closed`).
+    /// While it is open the items are the menu's, so a doll that dies meanwhile leaves none to copy.
+    fn open_inventory(&self, host: &mut dyn Host, player: u128, id: u32) {
+        let holder = Holder::Entity(id);
+        let already = OPEN.lock().is_ok_and(|open| open.contains_key(&player));
+        if already || goals::chest_open().is_some() || !DOLL.has(host, holder).unwrap_or(false) {
+            return;
         }
+        let mut data = DOLL.get(host, holder).unwrap_or_default();
+        let items = goals::inventory(id).unwrap_or_else(|| data.items.clone());
+        let size = items.len();
+        let rows = (size / 9).clamp(1, 6);
+        let name = doll_of(host, id).map_or("Doll", |d| d.name);
+        let window = host.open_menu_with_input(player, rows as _, Text::literal(name), items, 0..size);
+        debug(host, &format!("inventory {id}: open_menu_with_input({rows} rows) -> {window:?}"));
+        let Some(window) = window else { return };
+        if let Ok(mut open) = OPEN.lock() {
+            open.insert(player, (id, window));
+        }
+        goals::set_chest_open(Some(id));
+        data.items = vec![None; size];
+        goals::put_inventory(id, data.items.clone());
+        if let Some(doll) = doll_of(host, id) {
+            remember(id, doll, &data);
+        }
+        let _ = DOLL.set(host, holder, data);
     }
 
     /// What a doll's inventory holds now, from the chest screen or its own goals: saved with it.
@@ -647,7 +638,9 @@ impl Hooks for Mod {
                 click(host, id);
             }
             Some("minecraft:chest") => {
-                self.open_inventory(host, player.uuid, id, &data);
+                if let Ok(mut pending) = PENDING.lock() {
+                    pending.push((player.uuid, id));
+                }
                 return Flow::Cancel;
             }
             _ => {
@@ -661,64 +654,25 @@ impl Hooks for Mod {
         Flow::Cancel
     }
 
-    /// A click in a doll's inventory: a doll slot hands its stack to the player, an inventory slot
-    /// moves that whole stack into the doll if it fits. The menu itself moves nothing.
-    fn menu_clicked(&self, host: &mut dyn Host, event: &mut MenuClickedEvent) {
-        let Some((id, window)) = OPEN.lock().ok().and_then(|open| open.get(&event.uuid).copied())
-        else {
+    /// A doll's chest menu closed: what is left in it is the doll's, saved on the next tick. If the
+    /// doll is gone by then, the items stay in the menu and go back to the player.
+    fn menu_input_closed(&self, host: &mut dyn Host, event: &mut MenuInputClosedEvent<'_>) {
+        let Some((id, window)) = OPEN.lock().ok().and_then(|open| open.get(&event.uuid).copied()) else {
             return;
         };
-        debug(host, &format!("inventory {id}: click window {} (open {window}) slot {}", event.window, event.slot));
         if window != event.window {
             return;
         }
-        let holder = Holder::Entity(id);
-        if !DOLL.has(host, holder).unwrap_or(false) {
-            host.close_menu(event.uuid);
+        if let Ok(mut open) = OPEN.lock() {
+            open.remove(&event.uuid);
+        }
+        if known(id).is_none() {
+            goals::set_chest_open(None);
+            debug(host, &format!("inventory {id}: closed after the doll went; the items go back"));
             return;
         }
-        let mut data = DOLL.get(host, holder).unwrap_or_default();
-        if data.owner != event.uuid {
-            return;
-        }
-        let size = data.items.len();
-        if let Ok(slot) = usize::try_from(event.slot)
-            && slot < size
-        {
-            // Out of the doll, into the player's inventory; what does not fit stays.
-            if let Some(stack) = data.items[slot].take() {
-                data.items[slot] = host.give_stack(event.uuid, stack);
-            }
-        } else if let Some(inv) = inventory_slot(size, event.slot) {
-            // Into the doll: only a whole stack, and only once the doll has made room for it.
-            let Some(stack) = host.player_stacks(event.uuid).and_then(|s| s.get(inv).cloned().flatten())
-            else {
-                return;
-            };
-            let max = host.max_stack_size(&stack.item).unwrap_or(64);
-            let mut items = data.items.clone();
-            if !store(&mut items, &stack, max) {
-                return;
-            }
-            let Some(name) = host.server_players().into_iter().find(|p| p.uuid == event.uuid).map(|p| p.name)
-            else {
-                return;
-            };
-            let ran = host.run_command(&format!("item replace entity {name} container.{inv} with minecraft:air"));
-            debug(host, &format!("  put {} x{} from slot {inv}: command ran={ran}", stack.item, stack.count));
-            if !ran {
-                return;
-            }
-            data.items = items;
-        } else {
-            return;
-        }
-        host.set_menu_items(event.uuid, data.items.clone());
-        goals::put_inventory(id, data.items.clone());
-        if let Some(doll) = doll_of(host, id) {
-            remember(id, doll, &data);
-        }
-        let _ = DOLL.set(host, holder, data);
+        let items: Vec<Option<ItemStack>> = event.slots.iter_mut().map(Option::take).collect();
+        goals::chest_closed(id, items);
     }
 
     fn menu_closed(&self, _: &mut dyn Host, event: &mut MenuClosedEvent) {
@@ -767,7 +721,11 @@ impl Hooks for Mod {
                 give_to_owner(host, k.owner, belongings(&k));
             }
         }
-        // What the chest screen left in a doll, and what the dolls' own jobs changed.
+        let pending: Vec<(u128, u32)> = PENDING.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
+        for (player, doll) in pending {
+            self.open_inventory(host, player, doll);
+        }
+        // What the chest menu left in a doll, and what the dolls' own jobs changed.
         for (from, items) in goals::take_chest_closed() {
             self.store_items(host, from, items, true);
         }
@@ -908,33 +866,6 @@ mod tests {
         assert!(following.enabled);
         assert_eq!(following.chat_level, DEFAULT_CHAT_LEVEL);
         assert_eq!(following.items, vec![None; INVENTORY]);
-    }
-
-    #[test]
-    fn a_stack_goes_in_whole_or_not_at_all() {
-        let mut items = vec![None; INVENTORY];
-        items[0] = Some(ItemStack::new("minecraft:torch", 60));
-        assert!(store(&mut items, &ItemStack::new("minecraft:torch", 10), 64));
-        assert_eq!(items[0].as_ref().map(|s| s.count), Some(64));
-        assert_eq!(items[1].as_ref().map(|s| s.count), Some(6));
-        let mut full = vec![Some(ItemStack::new("minecraft:dirt", 64)); INVENTORY];
-        let before = full.clone();
-        assert!(!store(&mut full, &ItemStack::new("minecraft:torch", 1), 64));
-        assert_eq!(full, before);
-    }
-
-    #[test]
-    fn clicks_below_the_row_land_on_the_inventory_then_the_hotbar() {
-        assert_eq!(inventory_slot(9, 3), None);
-        assert_eq!(inventory_slot(9, 9), Some(9));
-        assert_eq!(inventory_slot(9, 35), Some(35));
-        assert_eq!(inventory_slot(9, 36), Some(0));
-        assert_eq!(inventory_slot(9, 44), Some(8));
-        assert_eq!(inventory_slot(9, 45), None);
-        // Russia's four rows: the inventory starts after its 36 slots.
-        assert_eq!(inventory_slot(36, 35), None);
-        assert_eq!(inventory_slot(36, 36), Some(9));
-        assert_eq!(inventory_slot(36, 63), Some(0));
     }
 
     #[test]

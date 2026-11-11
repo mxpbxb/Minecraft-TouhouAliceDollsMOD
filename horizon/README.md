@@ -45,10 +45,11 @@ The fork cannot add new living mob types, so each doll is a silent chicken with 
 drawn with the doll's own model (the extras with their own box models). A cancellable hook on
 `Mob::voice` keeps it quiet.
 
-A single-player world has no server menus, so a doll's inventory opens in the chest screen the way a
-chest minecart's does: three hooks in the game's container code open it under a stand-in key, show it
-as a chest, and hand its contents back to the doll when it closes. On a server the doll uses a server
-menu instead. Mob goals can't see dropped items, so the api crate finds and takes Russia's.
+A doll's inventory opens as a chest menu with input slots (`open_menu_with_input`): you put items in
+and take them out as in any chest, and what is left in it when it closes is the doll's. Single player
+runs an integrated server, which can't open a menu in the middle of the player's own click, so the
+menu opens on the next tick. Mob goals can't see dropped items, so the api crate finds and takes
+Russia's. Wakasagi swims at a dolphin's pace in water.
 
 Not ported yet: Germany's sapling planting, chunk loading, Ooedo's quarry, London's stronghold
 direction and spawner mob names, and Aya's real screenshots.

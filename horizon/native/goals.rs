@@ -237,32 +237,18 @@ fn take_one(id: u32, item: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// The chest screen a doll's inventory opens in. A single player has no server menus, so the game
-/// shows it as it shows a chest minecart's: the slots under a stand-in container key, copied back
-/// when the screen closes. The hooks in the game's container code read these.
-pub const CHEST_KEY_X: i32 = i32::MAX - 14;
-
-static CHEST_REQUEST: Mutex<Option<(u32, String, Vec<Option<ItemStack>>)>> = Mutex::new(None);
+/// The doll whose inventory its owner has open in a chest menu: while it is open its items are the
+/// menu's, and nothing else may change them.
 static CHEST_CLOSED: Mutex<Vec<(u32, Vec<Option<ItemStack>>)>> = Mutex::new(Vec::new());
 static CHEST_OPEN: Mutex<Option<u32>> = Mutex::new(None);
 
-/// Asks the game to open doll `id`'s inventory, titled `title`, on its next tick.
-pub fn request_chest(id: u32, title: String, items: Vec<Option<ItemStack>>) {
-    if let Ok(mut request) = CHEST_REQUEST.lock() {
-        *request = Some((id, title, items));
-    }
-}
-
-/// The game's side: the inventory to open now, if one was asked for.
-pub fn take_chest_request() -> Option<(u32, String, Vec<Option<ItemStack>>)> {
-    let request = CHEST_REQUEST.lock().ok()?.take()?;
+pub fn set_chest_open(id: Option<u32>) {
     if let Ok(mut open) = CHEST_OPEN.lock() {
-        *open = Some(request.0);
+        *open = id;
     }
-    Some(request)
 }
 
-/// The game's side: the doll inventory screen closed, holding `items`.
+/// The doll inventory menu closed, holding `items`, for the api crate to save on its next tick.
 pub fn chest_closed(id: u32, items: Vec<Option<ItemStack>>) {
     if let Ok(mut open) = CHEST_OPEN.lock()
         && *open == Some(id)
@@ -402,6 +388,9 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
         SNEAKING.store(p.sneaking, Ordering::Relaxed);
     }
     let Some(state) = state(m.id) else { return };
+    if kind == Kind::Wakasagi && m.fluids.in_water && state.mode != RIDE {
+        swim(m);
+    }
     m.no_gravity = state.mode == RIDE;
     if state.mode == RIDE && state.enabled {
         sit_on_head(m, w);
@@ -461,6 +450,21 @@ fn tick_doll(m: &mut Mob, w: &MobWorld) {
     ai.goals.add(13, goals::Stroll::new(1.0).gate(patrolling).named("DollWander"));
     ai.goals.add(14, goals::LookAtPlayer::new(8.0));
     ai.goals.add(16, goals::RandomLookAround::default());
+}
+
+/// How fast Wakasagi swims: a dolphin's pace, a third of a block a tick.
+const SWIM_SPEED: f64 = 0.35;
+
+/// Wakasagi, a mermaid, swims as fast as a dolphin wherever her path leads in water: a walking mob
+/// only paddles there, whatever its speed.
+fn swim(m: &mut Mob) {
+    if m.ai.nav.path.is_none() {
+        return;
+    }
+    let yaw = f64::from(m.yaw).to_radians();
+    let (dx, dz) = (-yaw.sin(), yaw.cos());
+    m.velocity.x = m.velocity.x * 0.4 + dx * SWIM_SPEED * 0.6;
+    m.velocity.z = m.velocity.z * 0.4 + dz * SWIM_SPEED * 0.6;
 }
 
 fn patrolling(m: &Mob, _: &MobWorld) -> bool {
